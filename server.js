@@ -31,8 +31,10 @@ const PLUMBER_CONFIGS = {
 // ─────────────────────────────────────────────
 // Twilio credentials — set these as env variables
 // ─────────────────────────────────────────────
-const accountSid = process.env.TWILIO_ACCOUNT_SID;
-const authToken = process.env.TWILIO_AUTH_TOKEN;
+const accountSid = process.env.TWILIO_ACCOUNT_SID || '';
+const authToken = process.env.TWILIO_AUTH_TOKEN || '';
+console.log('SID loaded:', accountSid ? 'YES' : 'NO');
+console.log('TOKEN loaded:', authToken ? 'YES' : 'NO');
 const client = twilio(accountSid, authToken);
 
 // ─────────────────────────────────────────────
