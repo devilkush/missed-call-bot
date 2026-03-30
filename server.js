@@ -18,13 +18,31 @@ const twilioClient = twilio(
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-let db;
-MongoClient.connect(process.env.MONGODB_URI)
-  .then((client) => {
+// ─────────────────────────────────────────────
+// MONGO DB CONNECTION (Safe + Graceful)
+// ─────────────────────────────────────────────
+let db = null;
+
+async function connectToMongo() {
+  if (!process.env.MONGODB_URI) {
+    console.warn("⚠️ MONGODB_URI not set - Running without database (logs will be in memory only)");
+    return;
+  }
+
+  try {
+    const client = await MongoClient.connect(process.env.MONGODB_URI, {
+      serverSelectionTimeoutMS: 5000,
+    });
     db = client.db("zeromisscall");
-    console.log("✅ MongoDB connected");
-  })
-  .catch((err) => console.error("❌ MongoDB error:", err));
+    console.log("✅ MongoDB connected successfully to database: zeromisscall");
+  } catch (err) {
+    console.error("❌ MongoDB connection failed:", err.message);
+    console.warn("⚠️ Bot will continue running without database storage.");
+  }
+}
+
+// Connect when server starts
+connectToMongo();
 
 // ─────────────────────────────────────────────
 // EMERGENCY KEYWORDS
