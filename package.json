@@ -1,19 +1,21 @@
 {
-  "name": "missed-call-bot",
-  "version": "1.0.0",
-  "description": "Missed call SMS bot for plumbers",
+  "name": "zeromisscall-bot",
+  "version": "2.0.0",
+  "description": "AI-powered missed call text-back bot for plumbing businesses",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
   "dependencies": {
-    "dotenv": "^17.3.1",
+    "dotenv": "^16.4.5",
     "express": "^4.18.2",
-    "twilio": "^4.19.0"
+    "mongodb": "^6.5.0",
+    "openai": "^4.47.1",
+    "twilio": "^5.1.0"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2"
+    "nodemon": "^3.1.0"
   },
   "engines": {
     "node": ">=18.0.0"
