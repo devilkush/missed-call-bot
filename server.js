@@ -18,34 +18,18 @@ const twilioClient = twilio(
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// ─────────────────────────────────────────────
-// MONGO DB CONNECTION (Safe + Graceful)
-// ─────────────────────────────────────────────
-let db = null;
-
-async function connectToMongo() {
-  if (!process.env.MONGODB_URI) {
-    console.warn("⚠️ MONGODB_URI not set - Running without database (logs will be in memory only)");
-    return;
-  }
-
-  try {
-    const client = await MongoClient.connect(process.env.MONGODB_URI, {
-      serverSelectionTimeoutMS: 5000,
-    });
+let db;
+MongoClient.connect(process.env.MONGODB_URI)
+  .then((client) => {
     db = client.db("zeromisscall");
-    console.log("✅ MongoDB connected successfully to database: zeromisscall");
-  } catch (err) {
-    console.error("❌ MongoDB connection failed:", err.message);
-    console.warn("⚠️ Bot will continue running without database storage.");
-  }
-}
-
-// Connect when server starts
-connectToMongo();
+    console.log("✅ MongoDB connected");
+  })
+  .catch((err) => console.error("❌ MongoDB error:", err));
 
 // ─────────────────────────────────────────────
 // EMERGENCY KEYWORDS
+// Website promise: burst pipe, flooding, no hot water, gas leak
+// trigger instant owner SMS alert + AI shifts to emergency mode
 // ─────────────────────────────────────────────
 const EMERGENCY_KEYWORDS = [
   "burst", "flooding", "flooded", "flood",
@@ -54,6 +38,8 @@ const EMERGENCY_KEYWORDS = [
   "sewage", "overflow", "overflowing", "emergency",
   "urgent", "asap", "immediately", "help",
   "water everywhere", "ceiling leaking", "ceiling dripping",
+  "water damage", "cant turn off", "can't turn off",
+  "valve stuck", "pipe cracked", "pipe broken",
 ];
 
 function isEmergency(text) {
@@ -62,8 +48,28 @@ function isEmergency(text) {
 }
 
 // ─────────────────────────────────────────────
+// DEDUPLICATION
+// Twilio can retry webhooks; this prevents sending the
+// opening SMS twice for one missed call.
+// ─────────────────────────────────────────────
+const recentMissedCalls = new Map(); // callSid → timestamp
+
+function isDuplicate(callSid) {
+  const WINDOW_MS = 60_000;
+  const now = Date.now();
+  if (recentMissedCalls.has(callSid)) return true;
+  recentMissedCalls.set(callSid, now);
+  if (recentMissedCalls.size > 200) {
+    for (const [sid, ts] of recentMissedCalls) {
+      if (now - ts > WINDOW_MS) recentMissedCalls.delete(sid);
+    }
+  }
+  return false;
+}
+
+// ─────────────────────────────────────────────
 // GET PLUMBER CONFIG FROM MONGODB
-// (falls back to env vars for single-tenant testing)
+// Falls back to env vars for single-tenant / local testing
 // ─────────────────────────────────────────────
 async function getPlumberByTwilioNumber(twilioNumber) {
   if (db) {
@@ -72,7 +78,6 @@ async function getPlumberByTwilioNumber(twilioNumber) {
       .findOne({ twilioNumber, active: true });
     if (plumber) return plumber;
   }
-  // Fallback: single hardcoded config from env (for local testing)
   if (twilioNumber === process.env.TWILIO_NUMBER) {
     return {
       twilioNumber,
@@ -80,8 +85,9 @@ async function getPlumberByTwilioNumber(twilioNumber) {
       ownerName: process.env.OWNER_NAME || "the team",
       ownerPhone: process.env.OWNER_PHONE || "",
       serviceArea: process.env.SERVICE_AREA || "the local area",
-      hours: process.env.BUSINESS_HOURS || "Mon–Fri 8am–6pm",
+      hours: process.env.BUSINESS_HOURS || "Mon-Fri 8am-6pm",
       customFaqs: [],
+      services: [],
       emergencyAvailable: true,
     };
   }
@@ -90,31 +96,41 @@ async function getPlumberByTwilioNumber(twilioNumber) {
 
 // ─────────────────────────────────────────────
 // GET CONVERSATION HISTORY FROM MONGODB
+// Scoped to today so threads reset each day
 // ─────────────────────────────────────────────
 async function getConversation(twilioNumber, callerNumber) {
   if (!db) return [];
-  const convo = await db.collection("conversations").findOne({
-    twilioNumber,
-    callerNumber,
-    createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }, // last 24hrs
-  });
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+
+  const convo = await db.collection("conversations").findOne(
+    { twilioNumber, callerNumber, createdAt: { $gte: startOfDay } },
+    { sort: { createdAt: -1 } }
+  );
   return convo ? convo.messages : [];
 }
 
 // ─────────────────────────────────────────────
 // SAVE MESSAGE TO MONGODB
 // ─────────────────────────────────────────────
-async function saveMessage(twilioNumber, callerNumber, role, content, emergency = false) {
+async function saveMessage(
+  twilioNumber,
+  callerNumber,
+  role,
+  content,
+  emergency = false
+) {
   if (!db) return;
   const now = new Date();
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+
   await db.collection("conversations").updateOne(
-    { twilioNumber, callerNumber },
+    { twilioNumber, callerNumber, createdAt: { $gte: startOfDay } },
     {
       $setOnInsert: { createdAt: now },
-      $set: { updatedAt: now, emergency },
-      $push: {
-        messages: { role, content, timestamp: now },
-      },
+      $set: { updatedAt: now, ...(emergency && { emergency: true }) },
+      $push: { messages: { role, content, timestamp: now } },
     },
     { upsert: true }
   );
@@ -127,28 +143,44 @@ function buildSystemPrompt(plumber) {
   const faqBlock =
     plumber.customFaqs && plumber.customFaqs.length > 0
       ? `\n\nCUSTOM FAQs FOR THIS BUSINESS:\n` +
-        plumber.customFaqs.map((f) => `Q: ${f.question}\nA: ${f.answer}`).join("\n\n")
+        plumber.customFaqs
+          .map((f) => `Q: ${f.question}\nA: ${f.answer}`)
+          .join("\n\n")
       : "";
 
-  return `You are a friendly, professional AI assistant for ${plumber.businessName}, a plumbing business in the US. Your job is to handle text conversations with customers who just called and didn't get through.
+  const servicesBlock =
+    plumber.services && plumber.services.length > 0
+      ? `\nSERVICES OFFERED: ${plumber.services.join(", ")}`
+      : "";
 
-YOUR GOAL: Keep the customer engaged, answer their questions, and capture their job details (what they need, their address or zip code, and when they want someone to come out).
+  return `You are a friendly, professional AI assistant for ${plumber.businessName}, a plumbing business in the US. You handle text conversations with customers who just called and didn't get through.
+
+YOUR GOAL: Keep the customer engaged, answer their questions, and capture three things:
+1. What they need (describe the problem or job)
+2. Their zip code (to confirm we cover their area)
+3. When they'd like someone to come out
 
 BUSINESS DETAILS:
-- Business name: ${plumber.businessName}
+- Business: ${plumber.businessName}
 - Owner: ${plumber.ownerName}
 - Service area: ${plumber.serviceArea}
-- Business hours: ${plumber.hours}
-- Emergency availability: ${plumber.emergencyAvailable ? "Yes, we handle emergencies 24/7" : "Emergency hours only — we'll advise on alternatives if needed"}
+- Hours: ${plumber.hours}
+- Emergency 24/7: ${plumber.emergencyAvailable ? "Yes" : "No — for genuine emergencies refer to 911 or a 24hr service"}${servicesBlock}
 
-RULES:
-1. Be warm, helpful and concise. Keep replies under 3 sentences where possible — this is SMS, not email.
-2. Never make up prices. Say the owner will provide a clear quote before any work starts.
-3. If someone asks if you're a bot, be honest — say you're an AI assistant for ${plumber.businessName} and that ${plumber.ownerName} will follow up personally.
-4. If the job sounds urgent or complex, let them know ${plumber.ownerName} will call them back shortly.
-5. Always try to get their zip code to confirm you cover their area.
-6. Sign off messages naturally — no robotic sign-offs.
-7. Never discuss competitors.
+PLUMBING KNOWLEDGE (use naturally when relevant):
+- Common jobs: drain unblocking, boiler servicing/repair, water heater replacement (tank & tankless), bathroom/kitchen installs, leak detection and repair, pipe repair/replacement, radiator issues, outside tap installs, water pressure problems, toilet/cistern repairs, stopcock and valve issues.
+- For active leaks: advise customer to locate and shut off the main stop valve — usually under the kitchen sink or near the water meter.
+- Pricing: NEVER quote specific prices. Always say the owner will provide a clear, no-obligation quote before any work starts. No surprises.
+- Licensing: if asked, confirm the business is fully licensed and insured in their state (unless a customFaq says otherwise).
+
+TONE AND STYLE:
+1. Warm, human, and concise. This is SMS — aim for 2-3 sentences per message unless more is genuinely needed.
+2. Never start two consecutive replies the same way.
+3. If asked whether you're a bot: be honest. Say you're an AI assistant for ${plumber.businessName} and that ${plumber.ownerName} will follow up personally.
+4. Never mention competitors or compare prices.
+5. No robotic sign-offs like "Best regards" or "Sincerely".
+6. If the job sounds complex or needs a site visit, say ${plumber.ownerName} will call them back shortly.
+7. Once you have all three pieces of info (what they need, zip code, preferred time) — confirm you have it and tell them ${plumber.ownerName} will be in touch to confirm. Don't keep asking unnecessary questions after that.
 8. You are texting on behalf of ${plumber.businessName} — stay in character at all times.${faqBlock}`;
 }
 
@@ -160,21 +192,27 @@ async function sendSMS(to, from, body) {
 }
 
 // ─────────────────────────────────────────────
-// WEBHOOK 1: VOICE — plays greeting when call comes in
-// Set in Twilio: Voice > "A call comes in" > Webhook > POST > /voice
+// WEBHOOK 1: /voice
+// Plays a warm greeting when a call comes in, then hangs up.
+// The StatusCallback then fires /missed-call to send the text.
+//
+// Twilio Console:
+//   Voice > "A call comes in" > Webhook > POST > /voice
+//   Voice > Status Callback > POST > /missed-call
 // ─────────────────────────────────────────────
 app.post("/voice", async (req, res) => {
   const twilioNumber = req.body.To;
   const plumber = await getPlumberByTwilioNumber(twilioNumber);
   const businessName = plumber ? plumber.businessName : "us";
+  const ownerName = plumber ? plumber.ownerName : "the team";
 
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const twiml = new VoiceResponse();
 
   twiml.say(
     { voice: "Polly.Joanna-Neural" },
-    `Hey, thanks for calling ${businessName}! We're out on a job right now but we don't want to miss you. ` +
-    `We're sending you a text message right now so we can get you sorted fast. Talk soon!`
+    `Hey, thanks for calling ${businessName}! ${ownerName} is probably out on a job right now. ` +
+      `We're sending you a text right now so we can get you sorted fast. Talk soon!`
   );
 
   twiml.hangup();
@@ -184,30 +222,43 @@ app.post("/voice", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
-// WEBHOOK 2: MISSED CALL — fires when call ends unanswered
-// Set in Twilio: Voice > Status Callback > POST > /missed-call
+// WEBHOOK 2: /missed-call
+// Fires when a call ends as no-answer / busy / failed / canceled.
+// Sends the opening text within seconds and notifies the plumber.
+//
+// Twilio Console:
+//   Voice > Status Callback > POST > /missed-call
 // ─────────────────────────────────────────────
 app.post("/missed-call", async (req, res) => {
   const callerNumber = req.body.From;
   const twilioNumber = req.body.To;
   const callStatus = req.body.CallStatus;
+  const callSid = req.body.CallSid;
 
-  console.log(`📞 ${callStatus} | From: ${callerNumber} | To: ${twilioNumber}`);
+  console.log(
+    `📞 ${callStatus} | From: ${callerNumber} | To: ${twilioNumber} | SID: ${callSid}`
+  );
 
   const missedStatuses = ["no-answer", "busy", "failed", "canceled"];
   if (!missedStatuses.includes(callStatus)) {
-    return res.status(200).send("Call was answered.");
+    return res.status(200).send("Call was answered — no action needed.");
+  }
+
+  if (callSid && isDuplicate(callSid)) {
+    console.log(`⏭️  Duplicate callback for ${callSid} — skipping.`);
+    return res.status(200).send("Duplicate — skipped.");
   }
 
   const plumber = await getPlumberByTwilioNumber(twilioNumber);
   if (!plumber) {
-    console.warn(`⚠️ No plumber config for: ${twilioNumber}`);
+    console.warn(`⚠️  No plumber config found for: ${twilioNumber}`);
     return res.status(200).send("No config found.");
   }
 
+  // Opening message matches the website demo copy exactly
   const openingMessage =
-    `Hey! Thanks for calling ${plumber.businessName} — sorry we missed you, we're probably out on a job. ` +
-    `I can help you right now over text. What do you need?`;
+    `Hey! Thanks for calling ${plumber.businessName} — sorry we missed you, ` +
+    `we're probably out on a job. I can help you right now over text. What do you need?`;
 
   try {
     await sendSMS(callerNumber, twilioNumber, openingMessage);
@@ -218,104 +269,139 @@ app.post("/missed-call", async (req, res) => {
       await sendSMS(
         plumber.ownerPhone,
         twilioNumber,
-        `📞 Missed call from ${callerNumber}. Auto-reply sent. Check your dashboard for the conversation.`
+        `📞 Missed call from ${callerNumber}. Auto-reply sent — conversation started.`
       );
     }
 
-    console.log(`✅ Opening message sent to ${callerNumber}`);
+    console.log(`✅ Opening text sent to ${callerNumber}`);
     res.status(200).send("OK");
   } catch (err) {
-    console.error("❌ Error:", err.message);
+    console.error("❌ Error sending opening message:", err.message);
     res.status(500).send("Error");
   }
 });
 
 // ─────────────────────────────────────────────
-// WEBHOOK 3: INCOMING SMS — the AI conversation handler
-// Set in Twilio: Messaging > "A message comes in" > Webhook > POST > /incoming-sms
+// WEBHOOK 3: /incoming-sms
+// The full AI conversation handler.
+// Handles emergency detection, history, OpenAI, fallback.
+//
+// Twilio Console:
+//   Messaging > "A message comes in" > Webhook > POST > /incoming-sms
 // ─────────────────────────────────────────────
 app.post("/incoming-sms", async (req, res) => {
   const callerNumber = req.body.From;
   const twilioNumber = req.body.To;
   const incomingText = req.body.Body?.trim();
 
-  console.log(`💬 SMS from ${callerNumber}: "${incomingText}"`);
+  if (!incomingText) {
+    return res.status(200).send("Empty message — ignored.");
+  }
 
-  res.status(200).send("OK"); // respond to Twilio immediately
+  console.log(`💬 SMS | ${callerNumber} → ${twilioNumber}: "${incomingText}"`);
+
+  // Acknowledge Twilio immediately (must be within 15 seconds)
+  res.status(200).send("OK");
 
   const plumber = await getPlumberByTwilioNumber(twilioNumber);
   if (!plumber) {
-    console.warn(`⚠️ No plumber config for: ${twilioNumber}`);
+    console.warn(`⚠️  No plumber config for: ${twilioNumber}`);
     return;
   }
 
-  // ── EMERGENCY CHECK ──
+  // ── EMERGENCY DETECTION ──────────────────────────────────
   const emergency = isEmergency(incomingText);
   if (emergency && plumber.ownerPhone) {
     console.log(`🚨 EMERGENCY detected from ${callerNumber}`);
-    await sendSMS(
-      plumber.ownerPhone,
-      twilioNumber,
-      `🚨 EMERGENCY — ${callerNumber} needs urgent help: "${incomingText}". Call them back NOW.`
-    );
+    try {
+      await sendSMS(
+        plumber.ownerPhone,
+        twilioNumber,
+        `🚨 EMERGENCY — ${callerNumber} needs urgent help: "${incomingText}". Call them back NOW.`
+      );
+    } catch (alertErr) {
+      console.error("❌ Failed to send emergency alert:", alertErr.message);
+    }
   }
 
-  // ── SAVE CUSTOMER MESSAGE ──
+  // ── SAVE INCOMING MESSAGE ─────────────────────────────────
   await saveMessage(twilioNumber, callerNumber, "user", incomingText, emergency);
 
-  // ── GET CONVERSATION HISTORY ──
+  // ── LOAD CONVERSATION HISTORY ─────────────────────────────
   const history = await getConversation(twilioNumber, callerNumber);
 
-  // Build messages array for OpenAI
   const messages = [
     { role: "system", content: buildSystemPrompt(plumber) },
     ...history.map((m) => ({ role: m.role, content: m.content })),
   ];
 
-  // Add emergency context if needed
+  // Inject emergency escalation context if needed
   if (emergency) {
     messages.push({
       role: "system",
       content:
-        "IMPORTANT: This customer has an emergency. Acknowledge the urgency immediately. " +
-        "Tell them to shut off their main water valve if relevant. " +
+        "URGENT: This customer has a plumbing emergency. " +
+        "Acknowledge it immediately and with empathy. " +
+        "If water is involved, tell them to shut off the main stop valve right away. " +
         "Let them know the owner has been alerted and will call them back very shortly. " +
-        "Stay calm and keep them engaged.",
+        "Keep your reply short, calm, and focused on their safety.",
     });
   }
 
   try {
-    // ── CALL OPENAI ──
+    // ── CALL OPENAI ───────────────────────────────────────────
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages,
-      max_tokens: 160, // keep SMS-length responses
-      temperature: 0.7,
+      max_tokens: 180,
+      temperature: 0.72,
     });
 
     const aiReply = completion.choices[0].message.content.trim();
 
-    // ── SAVE AI REPLY ──
     await saveMessage(twilioNumber, callerNumber, "assistant", aiReply, emergency);
-
-    // ── SEND REPLY ──
     await sendSMS(callerNumber, twilioNumber, aiReply);
     console.log(`✅ AI replied to ${callerNumber}: "${aiReply}"`);
   } catch (err) {
     console.error("❌ OpenAI error:", err.message);
-    // Fallback message if OpenAI fails
+
+    // Fallback if OpenAI is unavailable — website promises this
     const fallback =
-      `Thanks for your message! ${plumber.ownerName} will get back to you shortly. ` +
+      `Thanks for your message! ${plumber.ownerName} will get back to you very shortly. ` +
       `If it's urgent, please call back and we'll pick up as soon as we can.`;
-    await sendSMS(callerNumber, twilioNumber, fallback);
+
+    try {
+      await saveMessage(twilioNumber, callerNumber, "assistant", fallback, emergency);
+      await sendSMS(callerNumber, twilioNumber, fallback);
+    } catch (fallbackErr) {
+      console.error("❌ Failed to send fallback:", fallbackErr.message);
+    }
   }
 });
 
 // ─────────────────────────────────────────────
 // HEALTH CHECK
 // ─────────────────────────────────────────────
-app.get("/", (req, res) => {
-  res.send("✅ ZeroMissCall bot is running.");
+app.get("/", (_req, res) => {
+  res.json({
+    status: "running",
+    service: "ZeroMissCall",
+    version: "2.1.0",
+    db: db ? "connected" : "disconnected",
+  });
+});
+
+// ─────────────────────────────────────────────
+// GLOBAL ERROR HANDLERS
+// Prevents any unhandled error from crashing the server
+// ─────────────────────────────────────────────
+app.use((err, _req, res, _next) => {
+  console.error("❌ Unhandled route error:", err);
+  res.status(500).send("Internal server error");
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("❌ Unhandled promise rejection:", reason);
 });
 
 const PORT = process.env.PORT || 3000;
