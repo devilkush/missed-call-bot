@@ -8,6 +8,7 @@ const optout = require("./optout");
 const ratelimit = require("./ratelimit");
 const emailService = require("./email");
 const { initScheduler } = require("./scheduler");
+const { registerAdminRoutes } = require("./admin");
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
@@ -29,8 +30,10 @@ MongoClient.connect(process.env.MONGODB_URI)
     db = client.db("zeromisscall");
     db_helpers.ensureIndexes(db);
     initScheduler(app, db, db_helpers, emailService);
+    registerAdminRoutes(app, db, db_helpers, emailService);
     console.log("✅ MongoDB connected");
     console.log("✅ MongoDB indexes ensured");
+    console.log("✅ Admin routes registered");
   })
   .catch((err) => console.error("❌ MongoDB error:", err));
 
@@ -181,7 +184,6 @@ app.post("/missed-call", async (req, res) => {
     `we're probably out on a job. I can help you right now over text. What do you need?`;
 
   try {
-    // ── OPT-OUT GATE ─────────────────────────────────────────
     const blocked = await optout.isBlockedFromSending(
       db_helpers, db, twilioNumber, callerNumber
     );
@@ -223,7 +225,6 @@ app.post("/incoming-sms", async (req, res) => {
 
   console.log(`💬 SMS | ${callerNumber} → ${twilioNumber}: "${incomingText}"`);
 
-  // Acknowledge Twilio immediately (must be within 15 seconds)
   res.status(200).send("OK");
 
   const plumber = await db_helpers.getPlumberByTwilioNumber(db, twilioNumber);
@@ -232,20 +233,17 @@ app.post("/incoming-sms", async (req, res) => {
     return;
   }
 
-  // ── COMPLIANCE KEYWORDS (STOP / START / HELP) ────────────
   const compliance = await optout.handleComplianceKeyword(
     db_helpers, db, sendSMS,
     twilioNumber, callerNumber, incomingText, plumber
   );
   if (compliance.handled) return;
 
-  // ── OPT-OUT GATE ─────────────────────────────────────────
   const blocked = await optout.isBlockedFromSending(
     db_helpers, db, twilioNumber, callerNumber
   );
   if (blocked) return;
 
-  // ── RATE LIMIT CHECK ─────────────────────────────────────
   const limitCheck = ratelimit.checkRateLimit(twilioNumber, callerNumber);
   if (limitCheck.limited) {
     console.log(`⚠️  RATE LIMITED: ${callerNumber} | Reason: ${limitCheck.reason}`);
@@ -257,7 +255,6 @@ app.post("/incoming-sms", async (req, res) => {
     return;
   }
 
-  // ── EMERGENCY DETECTION ──────────────────────────────────
   const emergency = isEmergency(incomingText);
   if (emergency && plumber.ownerPhone) {
     console.log(`🚨 EMERGENCY detected from ${callerNumber}`);
@@ -272,10 +269,8 @@ app.post("/incoming-sms", async (req, res) => {
     }
   }
 
-  // ── SAVE INCOMING MESSAGE ─────────────────────────────────
   await db_helpers.saveMessage(db, twilioNumber, callerNumber, "user", incomingText, { emergency });
 
-  // ── LOAD CONVERSATION HISTORY ─────────────────────────────
   const history = await db_helpers.getConversation(db, twilioNumber, callerNumber);
 
   const messages = [
@@ -296,7 +291,6 @@ app.post("/incoming-sms", async (req, res) => {
   }
 
   try {
-    // ── CALL OPENAI ───────────────────────────────────────────
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages,
@@ -306,7 +300,6 @@ app.post("/incoming-sms", async (req, res) => {
 
     const aiReply = completion.choices[0].message.content.trim();
 
-    // ── RECORD FOR RATE LIMITING ──────────────────────────────
     ratelimit.recordMessage(twilioNumber, callerNumber);
     const stats = ratelimit.getStats(twilioNumber, callerNumber);
     console.log(`📊 ${callerNumber} | msgs: ${stats.messageCount} | cost: $${stats.estimatedCost} | remaining: ${stats.messagesRemaining}`);
@@ -357,7 +350,7 @@ app.get("/", (_req, res) => {
   res.json({
     status:  "running",
     service: "ZeroMissCall",
-    version: "2.5.0",
+    version: "2.6.0",
     db:      db ? "connected" : "disconnected",
   });
 });
@@ -376,5 +369,5 @@ process.on("unhandledRejection", (reason) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 ZeroMissCall v2.5.0 running on port ${PORT}`);
+  console.log(`🚀 ZeroMissCall v2.6.0 running on port ${PORT}`);
 });
