@@ -5,11 +5,12 @@ const { OpenAI } = require("openai");
 const { MongoClient } = require("mongodb");
 const db_helpers = require("./db");
 const optout = require("./optout");
- 
+const ratelimit = require("./ratelimit");
+
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
- 
+
 // ─────────────────────────────────────────────
 // CLIENTS
 // ─────────────────────────────────────────────
@@ -17,9 +18,9 @@ const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
   process.env.TWILIO_AUTH_TOKEN
 );
- 
+
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
- 
+
 let db;
 MongoClient.connect(process.env.MONGODB_URI)
   .then((client) => {
@@ -29,7 +30,7 @@ MongoClient.connect(process.env.MONGODB_URI)
     console.log("✅ MongoDB indexes ensured");
   })
   .catch((err) => console.error("❌ MongoDB error:", err));
- 
+
 // ─────────────────────────────────────────────
 // EMERGENCY KEYWORDS
 // ─────────────────────────────────────────────
@@ -43,17 +44,17 @@ const EMERGENCY_KEYWORDS = [
   "water damage", "cant turn off", "can't turn off",
   "valve stuck", "pipe cracked", "pipe broken",
 ];
- 
+
 function isEmergency(text) {
   const lower = text.toLowerCase();
   return EMERGENCY_KEYWORDS.some((kw) => lower.includes(kw));
 }
- 
+
 // ─────────────────────────────────────────────
 // DEDUPLICATION
 // ─────────────────────────────────────────────
 const recentMissedCalls = new Map();
- 
+
 function isDuplicate(callSid) {
   const WINDOW_MS = 60_000;
   const now = Date.now();
@@ -66,7 +67,7 @@ function isDuplicate(callSid) {
   }
   return false;
 }
- 
+
 // ─────────────────────────────────────────────
 // BUILD SYSTEM PROMPT FOR OPENAI
 // ─────────────────────────────────────────────
@@ -78,32 +79,32 @@ function buildSystemPrompt(plumber) {
           .map((f) => `Q: ${f.question}\nA: ${f.answer}`)
           .join("\n\n")
       : "";
- 
+
   const servicesBlock =
     plumber.services && plumber.services.length > 0
       ? `\nSERVICES OFFERED: ${plumber.services.join(", ")}`
       : "";
- 
+
   return `You are a friendly, professional AI assistant for ${plumber.businessName}, a plumbing business in the US. You handle text conversations with customers who just called and didn't get through.
- 
+
 YOUR GOAL: Keep the customer engaged, answer their questions, and capture three things:
 1. What they need (describe the problem or job)
 2. Their zip code (to confirm we cover their area)
 3. When they'd like someone to come out
- 
+
 BUSINESS DETAILS:
 - Business: ${plumber.businessName}
 - Owner: ${plumber.ownerName}
 - Service area: ${plumber.serviceArea}
 - Hours: ${plumber.hours}
 - Emergency 24/7: ${plumber.emergencyAvailable ? "Yes" : "No — for genuine emergencies refer to 911 or a 24hr service"}${servicesBlock}
- 
+
 PLUMBING KNOWLEDGE (use naturally when relevant):
 - Common jobs: drain unblocking, boiler servicing/repair, water heater replacement (tank & tankless), bathroom/kitchen installs, leak detection and repair, pipe repair/replacement, radiator issues, outside tap installs, water pressure problems, toilet/cistern repairs, stopcock and valve issues.
 - For active leaks: advise customer to locate and shut off the main stop valve — usually under the kitchen sink or near the water meter.
 - Pricing: NEVER quote specific prices. Always say the owner will provide a clear, no-obligation quote before any work starts. No surprises.
 - Licensing: if asked, confirm the business is fully licensed and insured in their state (unless a customFaq says otherwise).
- 
+
 TONE AND STYLE:
 1. Warm, human, and concise. This is SMS — aim for 2-3 sentences per message unless more is genuinely needed.
 2. Never start two consecutive replies the same way.
@@ -114,14 +115,14 @@ TONE AND STYLE:
 7. Once you have all three pieces of info (what they need, zip code, preferred time) — confirm you have it and tell them ${plumber.ownerName} will be in touch to confirm. Don't keep asking unnecessary questions after that.
 8. You are texting on behalf of ${plumber.businessName} — stay in character at all times.${faqBlock}`;
 }
- 
+
 // ─────────────────────────────────────────────
 // SEND SMS HELPER
 // ─────────────────────────────────────────────
 async function sendSMS(to, from, body) {
   return twilioClient.messages.create({ to, from, body });
 }
- 
+
 // ─────────────────────────────────────────────
 // WEBHOOK 1: /voice
 // ─────────────────────────────────────────────
@@ -130,21 +131,21 @@ app.post("/voice", async (req, res) => {
   const plumber = await db_helpers.getPlumberByTwilioNumber(db, twilioNumber);
   const businessName = plumber ? plumber.businessName : "us";
   const ownerName    = plumber ? plumber.ownerName    : "the team";
- 
+
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const twiml = new VoiceResponse();
- 
+
   twiml.say(
     { voice: "Polly.Joanna-Neural" },
     `Hey, thanks for calling ${businessName}! ${ownerName} is probably out on a job right now. ` +
       `We're sending you a text right now so we can get you sorted fast. Talk soon!`
   );
- 
+
   twiml.hangup();
   res.type("text/xml");
   res.send(twiml.toString());
 });
- 
+
 // ─────────────────────────────────────────────
 // WEBHOOK 2: /missed-call
 // ─────────────────────────────────────────────
@@ -153,29 +154,29 @@ app.post("/missed-call", async (req, res) => {
   const twilioNumber = req.body.To;
   const callStatus   = req.body.CallStatus;
   const callSid      = req.body.CallSid;
- 
+
   console.log(`📞 ${callStatus} | From: ${callerNumber} | To: ${twilioNumber} | SID: ${callSid}`);
- 
+
   const missedStatuses = ["no-answer", "busy", "failed", "canceled"];
   if (!missedStatuses.includes(callStatus)) {
     return res.status(200).send("Call was answered — no action needed.");
   }
- 
+
   if (callSid && isDuplicate(callSid)) {
     console.log(`⏭️  Duplicate callback for ${callSid} — skipping.`);
     return res.status(200).send("Duplicate — skipped.");
   }
- 
+
   const plumber = await db_helpers.getPlumberByTwilioNumber(db, twilioNumber);
   if (!plumber) {
     console.warn(`⚠️  No plumber config found for: ${twilioNumber}`);
     return res.status(200).send("No config found.");
   }
- 
+
   const openingMessage =
     `Hey! Thanks for calling ${plumber.businessName} — sorry we missed you, ` +
     `we're probably out on a job. I can help you right now over text. What do you need?`;
- 
+
   try {
     // ── OPT-OUT GATE ─────────────────────────────────────────
     const blocked = await optout.isBlockedFromSending(
@@ -185,10 +186,10 @@ app.post("/missed-call", async (req, res) => {
       console.log(`🚫 Skipping opening text — ${callerNumber} has opted out.`);
       return res.status(200).send("Opted out — no message sent.");
     }
- 
+
     await sendSMS(callerNumber, twilioNumber, openingMessage);
     await db_helpers.saveMessage(db, twilioNumber, callerNumber, "assistant", openingMessage);
- 
+
     if (plumber.ownerPhone) {
       await sendSMS(
         plumber.ownerPhone,
@@ -196,7 +197,7 @@ app.post("/missed-call", async (req, res) => {
         `📞 Missed call from ${callerNumber}. Auto-reply sent — conversation started.`
       );
     }
- 
+
     console.log(`✅ Opening text sent to ${callerNumber}`);
     res.status(200).send("OK");
   } catch (err) {
@@ -204,7 +205,7 @@ app.post("/missed-call", async (req, res) => {
     res.status(500).send("Error");
   }
 });
- 
+
 // ─────────────────────────────────────────────
 // WEBHOOK 3: /incoming-sms
 // ─────────────────────────────────────────────
@@ -212,35 +213,47 @@ app.post("/incoming-sms", async (req, res) => {
   const callerNumber = req.body.From;
   const twilioNumber = req.body.To;
   const incomingText = req.body.Body?.trim();
- 
+
   if (!incomingText) {
     return res.status(200).send("Empty message — ignored.");
   }
- 
+
   console.log(`💬 SMS | ${callerNumber} → ${twilioNumber}: "${incomingText}"`);
- 
+
   // Acknowledge Twilio immediately (must be within 15 seconds)
   res.status(200).send("OK");
- 
+
   const plumber = await db_helpers.getPlumberByTwilioNumber(db, twilioNumber);
   if (!plumber) {
     console.warn(`⚠️  No plumber config for: ${twilioNumber}`);
     return;
   }
- 
+
   // ── COMPLIANCE KEYWORDS (STOP / START / HELP) ────────────
   const compliance = await optout.handleComplianceKeyword(
     db_helpers, db, sendSMS,
     twilioNumber, callerNumber, incomingText, plumber
   );
   if (compliance.handled) return;
- 
+
   // ── OPT-OUT GATE ─────────────────────────────────────────
   const blocked = await optout.isBlockedFromSending(
     db_helpers, db, twilioNumber, callerNumber
   );
   if (blocked) return;
- 
+
+  // ── RATE LIMIT CHECK ─────────────────────────────────────
+  const limitCheck = ratelimit.checkRateLimit(twilioNumber, callerNumber);
+  if (limitCheck.limited) {
+    console.log(`⚠️  RATE LIMITED: ${callerNumber} | Reason: ${limitCheck.reason}`);
+    try {
+      await sendSMS(callerNumber, twilioNumber, ratelimit.getRateLimitReply(plumber));
+    } catch (err) {
+      console.error("❌ Failed to send rate limit reply:", err.message);
+    }
+    return;
+  }
+
   // ── EMERGENCY DETECTION ──────────────────────────────────
   const emergency = isEmergency(incomingText);
   if (emergency && plumber.ownerPhone) {
@@ -255,18 +268,18 @@ app.post("/incoming-sms", async (req, res) => {
       console.error("❌ Failed to send emergency alert:", alertErr.message);
     }
   }
- 
+
   // ── SAVE INCOMING MESSAGE ─────────────────────────────────
   await db_helpers.saveMessage(db, twilioNumber, callerNumber, "user", incomingText, { emergency });
- 
+
   // ── LOAD CONVERSATION HISTORY ─────────────────────────────
   const history = await db_helpers.getConversation(db, twilioNumber, callerNumber);
- 
+
   const messages = [
     { role: "system", content: buildSystemPrompt(plumber) },
     ...history.map((m) => ({ role: m.role, content: m.content })),
   ];
- 
+
   if (emergency) {
     messages.push({
       role: "system",
@@ -278,7 +291,7 @@ app.post("/incoming-sms", async (req, res) => {
         "Keep your reply short, calm, and focused on their safety.",
     });
   }
- 
+
   try {
     // ── CALL OPENAI ───────────────────────────────────────────
     const completion = await openai.chat.completions.create({
@@ -287,19 +300,24 @@ app.post("/incoming-sms", async (req, res) => {
       max_tokens: 180,
       temperature: 0.72,
     });
- 
+
     const aiReply = completion.choices[0].message.content.trim();
- 
+
+    // ── RECORD MESSAGE FOR RATE LIMITING ─────────────────────
+    ratelimit.recordMessage(twilioNumber, callerNumber);
+    const stats = ratelimit.getStats(twilioNumber, callerNumber);
+    console.log(`📊 ${callerNumber} | msgs: ${stats.messageCount} | cost: $${stats.estimatedCost} | remaining: ${stats.messagesRemaining}`);
+
     await db_helpers.saveMessage(db, twilioNumber, callerNumber, "assistant", aiReply, { emergency });
     await sendSMS(callerNumber, twilioNumber, aiReply);
     console.log(`✅ AI replied to ${callerNumber}: "${aiReply}"`);
   } catch (err) {
     console.error("❌ OpenAI error:", err.message);
- 
+
     const fallback =
       `Thanks for your message! ${plumber.ownerName} will get back to you very shortly. ` +
       `If it's urgent, please call back and we'll pick up as soon as we can.`;
- 
+
     try {
       await db_helpers.saveMessage(db, twilioNumber, callerNumber, "assistant", fallback, { emergency });
       await sendSMS(callerNumber, twilioNumber, fallback);
@@ -308,7 +326,7 @@ app.post("/incoming-sms", async (req, res) => {
     }
   }
 });
- 
+
 // ─────────────────────────────────────────────
 // HEALTH CHECK
 // ─────────────────────────────────────────────
@@ -316,11 +334,11 @@ app.get("/", (_req, res) => {
   res.json({
     status:  "running",
     service: "ZeroMissCall",
-    version: "2.2.0",
+    version: "2.3.0",
     db:      db ? "connected" : "disconnected",
   });
 });
- 
+
 // ─────────────────────────────────────────────
 // GLOBAL ERROR HANDLERS
 // ─────────────────────────────────────────────
@@ -328,13 +346,12 @@ app.use((err, _req, res, _next) => {
   console.error("❌ Unhandled route error:", err);
   res.status(500).send("Internal server error");
 });
- 
+
 process.on("unhandledRejection", (reason) => {
   console.error("❌ Unhandled promise rejection:", reason);
 });
- 
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 ZeroMissCall v2.2.0 running on port ${PORT}`);
+  console.log(`🚀 ZeroMissCall v2.3.0 running on port ${PORT}`);
 });
- 
