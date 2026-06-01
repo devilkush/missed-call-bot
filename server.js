@@ -3,6 +3,7 @@ const express = require("express");
 const twilio = require("twilio");
 const { OpenAI } = require("openai");
 const { MongoClient } = require("mongodb");
+const db_helpers = require("./db");
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
@@ -22,14 +23,13 @@ let db;
 MongoClient.connect(process.env.MONGODB_URI)
   .then((client) => {
     db = client.db("zeromisscall");
+    db_helpers.ensureIndexes(db);
     console.log("✅ MongoDB connected");
   })
   .catch((err) => console.error("❌ MongoDB error:", err));
 
 // ─────────────────────────────────────────────
 // EMERGENCY KEYWORDS
-// Website promise: burst pipe, flooding, no hot water, gas leak
-// trigger instant owner SMS alert + AI shifts to emergency mode
 // ─────────────────────────────────────────────
 const EMERGENCY_KEYWORDS = [
   "burst", "flooding", "flooded", "flood",
@@ -49,10 +49,8 @@ function isEmergency(text) {
 
 // ─────────────────────────────────────────────
 // DEDUPLICATION
-// Twilio can retry webhooks; this prevents sending the
-// opening SMS twice for one missed call.
 // ─────────────────────────────────────────────
-const recentMissedCalls = new Map(); // callSid → timestamp
+const recentMissedCalls = new Map();
 
 function isDuplicate(callSid) {
   const WINDOW_MS = 60_000;
@@ -65,75 +63,6 @@ function isDuplicate(callSid) {
     }
   }
   return false;
-}
-
-// ─────────────────────────────────────────────
-// GET PLUMBER CONFIG FROM MONGODB
-// Falls back to env vars for single-tenant / local testing
-// ─────────────────────────────────────────────
-async function getPlumberByTwilioNumber(twilioNumber) {
-  if (db) {
-    const plumber = await db
-      .collection("plumbers")
-      .findOne({ twilioNumber, active: true });
-    if (plumber) return plumber;
-  }
-  if (twilioNumber === process.env.TWILIO_NUMBER) {
-    return {
-      twilioNumber,
-      businessName: process.env.BUSINESS_NAME || "Your Plumbing Co.",
-      ownerName: process.env.OWNER_NAME || "the team",
-      ownerPhone: process.env.OWNER_PHONE || "",
-      serviceArea: process.env.SERVICE_AREA || "the local area",
-      hours: process.env.BUSINESS_HOURS || "Mon-Fri 8am-6pm",
-      customFaqs: [],
-      services: [],
-      emergencyAvailable: true,
-    };
-  }
-  return null;
-}
-
-// ─────────────────────────────────────────────
-// GET CONVERSATION HISTORY FROM MONGODB
-// Scoped to today so threads reset each day
-// ─────────────────────────────────────────────
-async function getConversation(twilioNumber, callerNumber) {
-  if (!db) return [];
-  const startOfDay = new Date();
-  startOfDay.setHours(0, 0, 0, 0);
-
-  const convo = await db.collection("conversations").findOne(
-    { twilioNumber, callerNumber, createdAt: { $gte: startOfDay } },
-    { sort: { createdAt: -1 } }
-  );
-  return convo ? convo.messages : [];
-}
-
-// ─────────────────────────────────────────────
-// SAVE MESSAGE TO MONGODB
-// ─────────────────────────────────────────────
-async function saveMessage(
-  twilioNumber,
-  callerNumber,
-  role,
-  content,
-  emergency = false
-) {
-  if (!db) return;
-  const now = new Date();
-  const startOfDay = new Date();
-  startOfDay.setHours(0, 0, 0, 0);
-
-  await db.collection("conversations").updateOne(
-    { twilioNumber, callerNumber, createdAt: { $gte: startOfDay } },
-    {
-      $setOnInsert: { createdAt: now },
-      $set: { updatedAt: now, ...(emergency && { emergency: true }) },
-      $push: { messages: { role, content, timestamp: now } },
-    },
-    { upsert: true }
-  );
 }
 
 // ─────────────────────────────────────────────
@@ -193,16 +122,10 @@ async function sendSMS(to, from, body) {
 
 // ─────────────────────────────────────────────
 // WEBHOOK 1: /voice
-// Plays a warm greeting when a call comes in, then hangs up.
-// The StatusCallback then fires /missed-call to send the text.
-//
-// Twilio Console:
-//   Voice > "A call comes in" > Webhook > POST > /voice
-//   Voice > Status Callback > POST > /missed-call
 // ─────────────────────────────────────────────
 app.post("/voice", async (req, res) => {
   const twilioNumber = req.body.To;
-  const plumber = await getPlumberByTwilioNumber(twilioNumber);
+  const plumber = await db_helpers.getPlumberByTwilioNumber(db, twilioNumber);
   const businessName = plumber ? plumber.businessName : "us";
   const ownerName = plumber ? plumber.ownerName : "the team";
 
@@ -216,28 +139,20 @@ app.post("/voice", async (req, res) => {
   );
 
   twiml.hangup();
-
   res.type("text/xml");
   res.send(twiml.toString());
 });
 
 // ─────────────────────────────────────────────
 // WEBHOOK 2: /missed-call
-// Fires when a call ends as no-answer / busy / failed / canceled.
-// Sends the opening text within seconds and notifies the plumber.
-//
-// Twilio Console:
-//   Voice > Status Callback > POST > /missed-call
 // ─────────────────────────────────────────────
 app.post("/missed-call", async (req, res) => {
   const callerNumber = req.body.From;
   const twilioNumber = req.body.To;
-  const callStatus = req.body.CallStatus;
-  const callSid = req.body.CallSid;
+  const callStatus   = req.body.CallStatus;
+  const callSid      = req.body.CallSid;
 
-  console.log(
-    `📞 ${callStatus} | From: ${callerNumber} | To: ${twilioNumber} | SID: ${callSid}`
-  );
+  console.log(`📞 ${callStatus} | From: ${callerNumber} | To: ${twilioNumber} | SID: ${callSid}`);
 
   const missedStatuses = ["no-answer", "busy", "failed", "canceled"];
   if (!missedStatuses.includes(callStatus)) {
@@ -249,22 +164,20 @@ app.post("/missed-call", async (req, res) => {
     return res.status(200).send("Duplicate — skipped.");
   }
 
-  const plumber = await getPlumberByTwilioNumber(twilioNumber);
+  const plumber = await db_helpers.getPlumberByTwilioNumber(db, twilioNumber);
   if (!plumber) {
     console.warn(`⚠️  No plumber config found for: ${twilioNumber}`);
     return res.status(200).send("No config found.");
   }
 
-  // Opening message matches the website demo copy exactly
   const openingMessage =
     `Hey! Thanks for calling ${plumber.businessName} — sorry we missed you, ` +
     `we're probably out on a job. I can help you right now over text. What do you need?`;
 
   try {
     await sendSMS(callerNumber, twilioNumber, openingMessage);
-    await saveMessage(twilioNumber, callerNumber, "assistant", openingMessage);
+    await db_helpers.saveMessage(db, twilioNumber, callerNumber, "assistant", openingMessage);
 
-    // Notify plumber of the missed call
     if (plumber.ownerPhone) {
       await sendSMS(
         plumber.ownerPhone,
@@ -283,16 +196,11 @@ app.post("/missed-call", async (req, res) => {
 
 // ─────────────────────────────────────────────
 // WEBHOOK 3: /incoming-sms
-// The full AI conversation handler.
-// Handles emergency detection, history, OpenAI, fallback.
-//
-// Twilio Console:
-//   Messaging > "A message comes in" > Webhook > POST > /incoming-sms
 // ─────────────────────────────────────────────
 app.post("/incoming-sms", async (req, res) => {
-  const callerNumber = req.body.From;
-  const twilioNumber = req.body.To;
-  const incomingText = req.body.Body?.trim();
+  const callerNumber  = req.body.From;
+  const twilioNumber  = req.body.To;
+  const incomingText  = req.body.Body?.trim();
 
   if (!incomingText) {
     return res.status(200).send("Empty message — ignored.");
@@ -303,7 +211,7 @@ app.post("/incoming-sms", async (req, res) => {
   // Acknowledge Twilio immediately (must be within 15 seconds)
   res.status(200).send("OK");
 
-  const plumber = await getPlumberByTwilioNumber(twilioNumber);
+  const plumber = await db_helpers.getPlumberByTwilioNumber(db, twilioNumber);
   if (!plumber) {
     console.warn(`⚠️  No plumber config for: ${twilioNumber}`);
     return;
@@ -325,17 +233,16 @@ app.post("/incoming-sms", async (req, res) => {
   }
 
   // ── SAVE INCOMING MESSAGE ─────────────────────────────────
-  await saveMessage(twilioNumber, callerNumber, "user", incomingText, emergency);
+  await db_helpers.saveMessage(db, twilioNumber, callerNumber, "user", incomingText, { emergency });
 
   // ── LOAD CONVERSATION HISTORY ─────────────────────────────
-  const history = await getConversation(twilioNumber, callerNumber);
+  const history = await db_helpers.getConversation(db, twilioNumber, callerNumber);
 
   const messages = [
     { role: "system", content: buildSystemPrompt(plumber) },
     ...history.map((m) => ({ role: m.role, content: m.content })),
   ];
 
-  // Inject emergency escalation context if needed
   if (emergency) {
     messages.push({
       role: "system",
@@ -359,19 +266,18 @@ app.post("/incoming-sms", async (req, res) => {
 
     const aiReply = completion.choices[0].message.content.trim();
 
-    await saveMessage(twilioNumber, callerNumber, "assistant", aiReply, emergency);
+    await db_helpers.saveMessage(db, twilioNumber, callerNumber, "assistant", aiReply, { emergency });
     await sendSMS(callerNumber, twilioNumber, aiReply);
     console.log(`✅ AI replied to ${callerNumber}: "${aiReply}"`);
   } catch (err) {
     console.error("❌ OpenAI error:", err.message);
 
-    // Fallback if OpenAI is unavailable — website promises this
     const fallback =
       `Thanks for your message! ${plumber.ownerName} will get back to you very shortly. ` +
       `If it's urgent, please call back and we'll pick up as soon as we can.`;
 
     try {
-      await saveMessage(twilioNumber, callerNumber, "assistant", fallback, emergency);
+      await db_helpers.saveMessage(db, twilioNumber, callerNumber, "assistant", fallback, { emergency });
       await sendSMS(callerNumber, twilioNumber, fallback);
     } catch (fallbackErr) {
       console.error("❌ Failed to send fallback:", fallbackErr.message);
@@ -384,16 +290,15 @@ app.post("/incoming-sms", async (req, res) => {
 // ─────────────────────────────────────────────
 app.get("/", (_req, res) => {
   res.json({
-    status: "running",
+    status:  "running",
     service: "ZeroMissCall",
     version: "2.1.0",
-    db: db ? "connected" : "disconnected",
+    db:      db ? "connected" : "disconnected",
   });
 });
 
 // ─────────────────────────────────────────────
 // GLOBAL ERROR HANDLERS
-// Prevents any unhandled error from crashing the server
 // ─────────────────────────────────────────────
 app.use((err, _req, res, _next) => {
   console.error("❌ Unhandled route error:", err);
