@@ -9,6 +9,7 @@ const ratelimit = require("./ratelimit");
 const emailService = require("./email");
 const { initScheduler } = require("./scheduler");
 const { registerAdminRoutes } = require("./admin");
+const { registerDashboardRoute } = require("./dashboard");
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
@@ -31,9 +32,11 @@ MongoClient.connect(process.env.MONGODB_URI)
     db_helpers.ensureIndexes(db);
     initScheduler(app, db, db_helpers, emailService);
     registerAdminRoutes(app, db, db_helpers, emailService);
+    registerDashboardRoute(app, db, db_helpers);
     console.log("✅ MongoDB connected");
     console.log("✅ MongoDB indexes ensured");
     console.log("✅ Admin routes registered");
+    console.log("✅ Dashboard route registered");
   })
   .catch((err) => console.error("❌ MongoDB error:", err));
 
@@ -350,7 +353,7 @@ app.get("/", (_req, res) => {
   res.json({
     status:  "running",
     service: "ZeroMissCall",
-    version: "2.6.0",
+    version: "2.7.0",
     db:      db ? "connected" : "disconnected",
   });
 });
@@ -369,5 +372,5 @@ process.on("unhandledRejection", (reason) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 ZeroMissCall v2.6.0 running on port ${PORT}`);
+  console.log(`🚀 ZeroMissCall v2.7.0 running on port ${PORT}`);
 });
