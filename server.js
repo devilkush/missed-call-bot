@@ -6,6 +6,7 @@ const { MongoClient } = require("mongodb");
 const db_helpers = require("./db");
 const optout = require("./optout");
 const ratelimit = require("./ratelimit");
+const emailService = require("./email");
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
@@ -303,7 +304,7 @@ app.post("/incoming-sms", async (req, res) => {
 
     const aiReply = completion.choices[0].message.content.trim();
 
-    // ── RECORD MESSAGE FOR RATE LIMITING ─────────────────────
+    // ── RECORD FOR RATE LIMITING ──────────────────────────────
     ratelimit.recordMessage(twilioNumber, callerNumber);
     const stats = ratelimit.getStats(twilioNumber, callerNumber);
     console.log(`📊 ${callerNumber} | msgs: ${stats.messageCount} | cost: $${stats.estimatedCost} | remaining: ${stats.messagesRemaining}`);
@@ -328,13 +329,35 @@ app.post("/incoming-sms", async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
+// TEST EMAIL ENDPOINT
+// Visit: /test-emails?secret=YOUR_ADMIN_SECRET&email=you@email.com
+// Sends all 3 email templates to the specified address
+// ─────────────────────────────────────────────
+app.get("/test-emails", async (req, res) => {
+  if (req.query.secret !== process.env.ADMIN_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const toEmail = req.query.email || process.env.OWNER_EMAIL;
+  if (!toEmail) {
+    return res.status(400).json({ error: "No email address provided" });
+  }
+  try {
+    await emailService.sendTestEmails(toEmail);
+    res.json({ success: true, message: `3 test emails sent to ${toEmail}` });
+  } catch (err) {
+    console.error("❌ Test email error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────
 // HEALTH CHECK
 // ─────────────────────────────────────────────
 app.get("/", (_req, res) => {
   res.json({
     status:  "running",
     service: "ZeroMissCall",
-    version: "2.3.0",
+    version: "2.4.0",
     db:      db ? "connected" : "disconnected",
   });
 });
@@ -353,5 +376,5 @@ process.on("unhandledRejection", (reason) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 ZeroMissCall v2.3.0 running on port ${PORT}`);
+  console.log(`🚀 ZeroMissCall v2.4.0 running on port ${PORT}`);
 });
