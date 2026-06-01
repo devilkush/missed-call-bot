@@ -7,6 +7,7 @@ const db_helpers = require("./db");
 const optout = require("./optout");
 const ratelimit = require("./ratelimit");
 const emailService = require("./email");
+const { initScheduler } = require("./scheduler");
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
@@ -27,6 +28,7 @@ MongoClient.connect(process.env.MONGODB_URI)
   .then((client) => {
     db = client.db("zeromisscall");
     db_helpers.ensureIndexes(db);
+    initScheduler(app, db, db_helpers, emailService);
     console.log("✅ MongoDB connected");
     console.log("✅ MongoDB indexes ensured");
   })
@@ -330,8 +332,6 @@ app.post("/incoming-sms", async (req, res) => {
 
 // ─────────────────────────────────────────────
 // TEST EMAIL ENDPOINT
-// Visit: /test-emails?secret=YOUR_ADMIN_SECRET&email=you@email.com
-// Sends all 3 email templates to the specified address
 // ─────────────────────────────────────────────
 app.get("/test-emails", async (req, res) => {
   if (req.query.secret !== process.env.ADMIN_SECRET) {
@@ -357,7 +357,7 @@ app.get("/", (_req, res) => {
   res.json({
     status:  "running",
     service: "ZeroMissCall",
-    version: "2.4.0",
+    version: "2.5.0",
     db:      db ? "connected" : "disconnected",
   });
 });
@@ -376,5 +376,5 @@ process.on("unhandledRejection", (reason) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 ZeroMissCall v2.4.0 running on port ${PORT}`);
+  console.log(`🚀 ZeroMissCall v2.5.0 running on port ${PORT}`);
 });
