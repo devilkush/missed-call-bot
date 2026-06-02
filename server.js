@@ -10,6 +10,7 @@ const emailService = require("./email");
 const { initScheduler } = require("./scheduler");
 const { registerAdminRoutes } = require("./admin");
 const { registerDashboardRoute } = require("./dashboard");
+const { fireLeadHandoff } = require("./handoff");
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
@@ -310,6 +311,11 @@ app.post("/incoming-sms", async (req, res) => {
     await db_helpers.saveMessage(db, twilioNumber, callerNumber, "assistant", aiReply, { emergency });
     await sendSMS(callerNumber, twilioNumber, aiReply);
     console.log(`✅ AI replied to ${callerNumber}: "${aiReply}"`);
+
+    // ── LEAD CAPTURE CHECK ───────────────────────────────────
+    const updatedHistory = await db_helpers.getConversation(db, twilioNumber, callerNumber);
+    await fireLeadHandoff(db, db_helpers, sendSMS, twilioNumber, callerNumber, updatedHistory, plumber);
+
   } catch (err) {
     console.error("❌ OpenAI error:", err.message);
 
@@ -353,7 +359,7 @@ app.get("/", (_req, res) => {
   res.json({
     status:  "running",
     service: "ZeroMissCall",
-    version: "2.7.0",
+    version: "2.8.0",
     db:      db ? "connected" : "disconnected",
   });
 });
@@ -372,5 +378,5 @@ process.on("unhandledRejection", (reason) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 ZeroMissCall v2.7.0 running on port ${PORT}`);
+  console.log(`🚀 ZeroMissCall v2.8.0 running on port ${PORT}`);
 });
