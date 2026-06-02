@@ -11,8 +11,13 @@ const { initScheduler } = require("./scheduler");
 const { registerAdminRoutes } = require("./admin");
 const { registerDashboardRoute } = require("./dashboard");
 const { fireLeadHandoff } = require("./handoff");
+const { registerBillingRoutes } = require("./billing");
 
 const app = express();
+
+// ── Stripe webhook needs raw body — register BEFORE express.json()
+app.use("/billing/webhook", express.raw({ type: "application/json" }));
+
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
@@ -34,10 +39,12 @@ MongoClient.connect(process.env.MONGODB_URI)
     initScheduler(app, db, db_helpers, emailService);
     registerAdminRoutes(app, db, db_helpers, emailService);
     registerDashboardRoute(app, db, db_helpers);
+    registerBillingRoutes(app, db, db_helpers, emailService);
     console.log("✅ MongoDB connected");
     console.log("✅ MongoDB indexes ensured");
     console.log("✅ Admin routes registered");
     console.log("✅ Dashboard route registered");
+    console.log("✅ Billing routes registered");
   })
   .catch((err) => console.error("❌ MongoDB error:", err));
 
@@ -359,7 +366,7 @@ app.get("/", (_req, res) => {
   res.json({
     status:  "running",
     service: "ZeroMissCall",
-    version: "2.8.0",
+    version: "2.9.0",
     db:      db ? "connected" : "disconnected",
   });
 });
@@ -378,5 +385,5 @@ process.on("unhandledRejection", (reason) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 ZeroMissCall v2.8.0 running on port ${PORT}`);
+  console.log(`🚀 ZeroMissCall v2.9.0 running on port ${PORT}`);
 });
