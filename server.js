@@ -15,6 +15,24 @@ const { registerBillingRoutes } = require("./billing");
 
 const app = express();
 
+// ─────────────────────────────────────────────
+// CORS — allow requests from zeromisscall.com
+// ─────────────────────────────────────────────
+app.use((req, res, next) => {
+  const allowed = [
+    "https://zeromisscall.com",
+    "https://www.zeromisscall.com",
+  ];
+  const origin = req.headers.origin;
+  if (!origin || allowed.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin || "*");
+  }
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
+
 // ── Stripe webhook needs raw body — register BEFORE express.json()
 app.use("/billing/webhook", express.raw({ type: "application/json" }));
 
@@ -359,6 +377,77 @@ app.get("/test-emails", async (req, res) => {
   }
 });
 
+
+// ─────────────────────────────────────────────
+// CONTACT FORM — website enquiries
+// POST /contact
+// ─────────────────────────────────────────────
+app.post("/contact", async (req, res) => {
+  const { firstName, lastName, email, business, topic, message } = req.body || {};
+
+  // Basic validation
+  if (!firstName || !email || !message) {
+    return res.status(400).json({ error: "Missing required fields." });
+  }
+
+  const name = `${firstName || ""} ${lastName || ""}`.trim();
+
+  // Send notification email to owner
+  try {
+    const { Resend } = require("resend");
+    const resendClient = new Resend(process.env.RESEND_API_KEY);
+
+    const notifyHtml = `
+      <div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:24px;">
+        <h2 style="color:#E8791A;margin-bottom:4px;">New Contact Form Submission</h2>
+        <p style="color:#666;margin-bottom:24px;font-size:14px;">zeromisscall.com/contact.html</p>
+        <table style="width:100%;border-collapse:collapse;">
+          <tr><td style="padding:8px 0;color:#999;font-size:13px;width:120px;">Name</td><td style="padding:8px 0;font-size:14px;">${name}</td></tr>
+          <tr><td style="padding:8px 0;color:#999;font-size:13px;">Email</td><td style="padding:8px 0;font-size:14px;"><a href="mailto:${email}" style="color:#E8791A;">${email}</a></td></tr>
+          <tr><td style="padding:8px 0;color:#999;font-size:13px;">Business</td><td style="padding:8px 0;font-size:14px;">${business || "—"}</td></tr>
+          <tr><td style="padding:8px 0;color:#999;font-size:13px;">Topic</td><td style="padding:8px 0;font-size:14px;">${topic || "—"}</td></tr>
+        </table>
+        <div style="margin-top:20px;background:#f5f5f5;border-radius:8px;padding:16px;">
+          <p style="margin:0;font-size:14px;color:#333;white-space:pre-wrap;">${message}</p>
+        </div>
+        <p style="margin-top:24px;font-size:12px;color:#999;">Sent from ZeroMissCall contact form</p>
+      </div>
+    `;
+
+    await resendClient.emails.send({
+      from:    "ZeroMissCall <reports@zeromisscall.com>",
+      to:      process.env.OWNER_EMAIL || "hello@zeromisscall.com",
+      replyTo: email,
+      subject: `[Contact] ${topic || "New enquiry"} — ${name}`,
+      html:    notifyHtml,
+    });
+
+    // Send auto-reply to sender
+    const autoReplyHtml = `
+      <div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:24px;background:#0b1928;color:#fff;">
+        <h2 style="color:#E8791A;">Thanks, ${firstName}!</h2>
+        <p style="color:#96aec6;line-height:1.7;">We've received your message and will get back to you within 2 hours on business days.</p>
+        <p style="color:#96aec6;line-height:1.7;">In the meantime, feel free to explore how ZeroMissCall works at <a href="https://zeromisscall.com" style="color:#E8791A;">zeromisscall.com</a>.</p>
+        <p style="color:#96aec6;margin-top:24px;font-size:14px;">— The ZeroMissCall Team</p>
+      </div>
+    `;
+
+    await resendClient.emails.send({
+      from:    "Ian from ZeroMissCall <ian@zeromisscall.com>",
+      to:      email,
+      subject: "We got your message — ZeroMissCall",
+      html:    autoReplyHtml,
+    });
+
+    console.log(`📧 Contact form from ${name} <${email}> — topic: ${topic || "n/a"}`);
+    res.json({ ok: true });
+
+  } catch (err) {
+    console.error("❌ Contact form error:", err.message);
+    res.status(500).json({ error: "Failed to send. Please email hello@zeromisscall.com directly." });
+  }
+});
+
 // ─────────────────────────────────────────────
 // HEALTH CHECK
 // ─────────────────────────────────────────────
@@ -366,7 +455,7 @@ app.get("/", (_req, res) => {
   res.json({
     status:  "running",
     service: "ZeroMissCall",
-    version: "2.9.0",
+    version: "2.10.0",
     db:      db ? "connected" : "disconnected",
   });
 });
