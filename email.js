@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────
-// PHASE 4 — EMAIL INFRASTRUCTURE
+// PHASE 4 - EMAIL INFRASTRUCTURE
 // ZeroMissCall v2
 //
 // HOW TO USE:
@@ -40,7 +40,7 @@ const BRAND = {
 // ─────────────────────────────────────────────
 // SHARED EMAIL WRAPPER
 // Navy header with logo, white content area,
-// dark footer — matches site design exactly
+// dark footer - matches site design exactly
 // ─────────────────────────────────────────────
 function wrapEmail(contentHtml, previewText = "") {
   return `<!DOCTYPE html>
@@ -71,7 +71,7 @@ function wrapEmail(contentHtml, previewText = "") {
   </style>
 </head>
 <body style="background-color:#0b1928;margin:0;padding:0;">
-  ${previewText ? `<div style="display:none;max-height:0;overflow:hidden;font-size:1px;line-height:1px;color:#0b1928;">${previewText}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>` : ""}
+  ${previewText ? `<div style="display:none;max-height:0;overflow:hidden;font-size:1px;line-height:1px;color:#0b1928;">${previewText}</div>` : ""}
 
   <!-- Outer wrapper -->
   <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#0b1928;">
@@ -118,7 +118,7 @@ function wrapEmail(contentHtml, previewText = "") {
 }
 
 // ─────────────────────────────────────────────
-// TEMPLATE A — WEEKLY DIGEST
+// TEMPLATE A - WEEKLY DIGEST
 // Sends every Monday morning
 // Three big numbers, money-first, dead simple
 // ─────────────────────────────────────────────
@@ -202,13 +202,13 @@ function buildWeeklyDigestEmail(plumber, stats) {
   `;
 
   return {
-    subject: `Your ZeroMissCall Weekly Summary — ${totalConversations} calls handled`,
+    subject: `Your ZeroMissCall Weekly Summary - ${totalConversations} calls handled`,
     html: wrapEmail(content, previewText),
   };
 }
 
 // ─────────────────────────────────────────────
-// TEMPLATE B — TRIAL END EMAIL
+// TEMPLATE B - TRIAL END EMAIL
 // Sends day 13 of trial (day before expiry)
 // Personal tone, shows real conversation snippets,
 // single CTA to upgrade
@@ -220,7 +220,7 @@ function buildTrialEndEmail(plumber, stats, conversations) {
     estimatedRevenue,
   } = stats;
 
-  const previewText = `Your trial ends tomorrow — here's what ZeroMissCall captured for ${plumber.businessName}.`;
+  const previewText = `Your trial ends tomorrow - here's what ZeroMissCall captured for ${plumber.businessName}.`;
 
   // Pick up to 2 real conversation snippets
   const snippets = conversations
@@ -246,7 +246,7 @@ function buildTrialEndEmail(plumber, stats, conversations) {
         `;
       }).join("")
     : `<div style="background:#f8f9fa;border-radius:10px;padding:16px 20px;text-align:center;color:#6b84a0;font-family:'DM Sans',Arial,sans-serif;font-size:14px;">
-        No conversations yet — but your number is ready to go the moment a call comes in.
+        No conversations yet - but your number is ready to go the moment a call comes in.
        </div>`;
 
   const content = `
@@ -301,23 +301,23 @@ function buildTrialEndEmail(plumber, stats, conversations) {
         $69/month &mdash; cancel anytime &mdash; no contracts
       </p>
       <a href="https://missed-call-bot-production.up.railway.app/billing/create-checkout/${plumber.dashboardToken}" class="cta-button" style="display:inline-block;background:#E8791A;color:#ffffff;font-family:'Nunito',Arial,sans-serif;font-size:16px;font-weight:700;padding:16px 40px;border-radius:8px;text-decoration:none;">
-        Keep ZeroMissCall Active →
+        Keep ZeroMissCall Active &rarr;
       </a>
       <p style="font-family:'DM Sans',Arial,sans-serif;font-size:13px;color:#6b84a0;margin-top:16px;line-height:1.5;">
         If you don't upgrade, your number stops responding to missed calls tomorrow.<br/>
-        Questions? Reply to this email — Ian reads every one.
+        Questions? Reply to this email - Ian reads every one.
       </p>
     </div>
   `;
 
   return {
-    subject: `Your trial ends tomorrow — ${totalConversations} calls handled for ${plumber.businessName}`,
+    subject: `Your trial ends tomorrow - ${totalConversations} calls handled for ${plumber.businessName}`,
     html: wrapEmail(content, previewText),
   };
 }
 
 // ─────────────────────────────────────────────
-// TEMPLATE C — MONTHLY REPORT
+// TEMPLATE C - MONTHLY REPORT
 // Sends last day of each month
 // 4 stats, top conversation, job type breakdown
 // Price right-aligned, professional
@@ -332,7 +332,7 @@ function buildMonthlyReportEmail(plumber, stats, monthName) {
     bestConvo,
   } = stats;
 
-  const previewText = `${plumber.businessName} — your ${monthName} ZeroMissCall report. Estimated $${estimatedRevenue} recovered.`;
+  const previewText = `${plumber.businessName} - your ${monthName} ZeroMissCall report. Estimated $${estimatedRevenue} recovered.`;
 
   const bestConvoHtml = bestConvo && bestConvo.messages
     ? `
@@ -348,7 +348,7 @@ function buildMonthlyReportEmail(plumber, stats, monthName) {
           </div>
         `).join("")}
         ${bestConvo.leadCaptured
-          ? `<div style="margin-top:10px;font-family:'DM Sans',Arial,sans-serif;font-size:12px;color:#3ecf8e;">✓ Lead captured — all 3 details collected</div>`
+          ? `<div style="margin-top:10px;font-family:'DM Sans',Arial,sans-serif;font-size:12px;color:#3ecf8e;">Lead captured - all 3 details collected Lead captured - all 3 details collected</div>`
           : ""
         }
       </div>`
@@ -382,7 +382,7 @@ function buildMonthlyReportEmail(plumber, stats, monthName) {
         $${estimatedRevenue}
       </div>
       <div style="font-family:'DM Sans',Arial,sans-serif;font-size:13px;color:#6b84a0;margin-top:8px;">
-        Based on ${totalConversations} missed calls × $${plumber.averageJobValue || 250} avg job value
+        Based on ${totalConversations} missed calls x $${plumber.averageJobValue || 250} avg job value
       </div>
     </div>
 
@@ -450,7 +450,7 @@ function buildMonthlyReportEmail(plumber, stats, monthName) {
   `;
 
   return {
-    subject: `${plumber.businessName} — Your ${monthName} ZeroMissCall Report`,
+    subject: `${plumber.businessName} - Your ${monthName} ZeroMissCall Report`,
     html: wrapEmail(content, previewText),
   };
 }
@@ -461,7 +461,7 @@ function buildMonthlyReportEmail(plumber, stats, monthName) {
 
 async function sendWeeklyDigest(plumber, stats) {
   if (!plumber.email) {
-    console.warn(`⚠️  No email for plumber ${plumber.businessName} — skipping weekly digest`);
+    console.warn(`!️  No email for plumber ${plumber.businessName} - skipping weekly digest`);
     return;
   }
   const { subject, html } = buildWeeklyDigestEmail(plumber, stats);
@@ -482,7 +482,7 @@ async function sendWeeklyDigest(plumber, stats) {
 
 async function sendTrialEndEmail(plumber, stats, conversations) {
   if (!plumber.email) {
-    console.warn(`⚠️  No email for plumber ${plumber.businessName} — skipping trial end email`);
+    console.warn(`!️  No email for plumber ${plumber.businessName} - skipping trial end email`);
     return;
   }
   const { subject, html } = buildTrialEndEmail(plumber, stats, conversations);
@@ -503,7 +503,7 @@ async function sendTrialEndEmail(plumber, stats, conversations) {
 
 async function sendMonthlyReport(plumber, stats, monthName) {
   if (!plumber.email) {
-    console.warn(`⚠️  No email for plumber ${plumber.businessName} — skipping monthly report`);
+    console.warn(`!️  No email for plumber ${plumber.businessName} - skipping monthly report`);
     return;
   }
   const { subject, html } = buildMonthlyReportEmail(plumber, stats, monthName);
@@ -523,7 +523,7 @@ async function sendMonthlyReport(plumber, stats, monthName) {
 }
 
 // ─────────────────────────────────────────────
-// TEST SEND — fires all 3 emails to one address
+// TEST SEND - fires all 3 emails to one address
 // Call via GET /test-emails?secret=YOUR_ADMIN_SECRET
 // ─────────────────────────────────────────────
 async function sendTestEmails(toEmail) {
@@ -540,7 +540,7 @@ async function sendTestEmails(toEmail) {
     leadsCaptures:      6,
     emergencies:        1,
     estimatedRevenue:   2250,
-    weekOf:             "May 26 – Jun 1, 2026",
+    weekOf:             "May 26 - Jun 1, 2026",
     topJobTypes: [
       { type: "drain", count: 4 },
       { type: "boiler", count: 3 },
@@ -549,11 +549,11 @@ async function sendTestEmails(toEmail) {
     bestConvo: {
       leadCaptured: true,
       messages: [
-        { role: "assistant", content: "Hey! Thanks for calling Dave's Plumbing — sorry we missed you. What do you need?" },
+        { role: "assistant", content: "Hey! Thanks for calling Dave's Plumbing - sorry we missed you. What do you need?" },
         { role: "user",      content: "Hi yeah my kitchen drain is completely blocked, water isn't going down at all" },
         { role: "assistant", content: "That sounds frustrating! We can definitely sort that out. What's your zip code so I can confirm we cover your area?" },
         { role: "user",      content: "75201" },
-        { role: "assistant", content: "Perfect — we cover Dallas. When would you like someone to come out? Morning or afternoon works best?" },
+        { role: "assistant", content: "Perfect - we cover Dallas. When would you like someone to come out? Morning or afternoon works best?" },
         { role: "user",      content: "Tomorrow morning would be great" },
       ],
     },
@@ -584,19 +584,19 @@ module.exports = {
 // INTEGRATION INSTRUCTIONS
 // ─────────────────────────────────────────────────────────────
 //
-// STEP 1 — Install Resend:
+// STEP 1 - Install Resend:
 //   npm install resend
 //
-// STEP 2 — Add to .env and Railway environment variables:
+// STEP 2 - Add to .env and Railway environment variables:
 //   RESEND_API_KEY=re_xxxxxxxxxxxx
 //
-// STEP 3 — Add to .env.example:
+// STEP 3 - Add to .env.example:
 //   RESEND_API_KEY=your_resend_api_key
 //
-// STEP 4 — Add require at top of server.js:
+// STEP 4 - Add require at top of server.js:
 //   const emailService = require("./email");
 //
-// STEP 5 — Add test endpoint to server.js (before health check):
+// STEP 5 - Add test endpoint to server.js (before health check):
 //
 //   app.get("/test-emails", async (req, res) => {
 //     if (req.query.secret !== process.env.ADMIN_SECRET) {
@@ -611,10 +611,10 @@ module.exports = {
 //     }
 //   });
 //
-// STEP 6 — Add ADMIN_SECRET to .env and Railway:
+// STEP 6 - Add ADMIN_SECRET to .env and Railway:
 //   ADMIN_SECRET=choose_a_strong_random_string
 //
-// STEP 7 — Add to Resend dashboard:
+// STEP 7 - Add to Resend dashboard:
 //   - Go to resend.com/domains
 //   - Add zeromisscall.com
 //   - Add the DNS records to Hostinger
@@ -622,7 +622,7 @@ module.exports = {
 //   - Create reports@zeromisscall.com and ian@zeromisscall.com
 //     as sender identities
 //
-// STEP 8 — Test by visiting:
+// STEP 8 - Test by visiting:
 //   https://your-railway-url.railway.app/test-emails?secret=YOUR_ADMIN_SECRET&email=your@email.com
 //
 // ─────────────────────────────────────────────────────────────
