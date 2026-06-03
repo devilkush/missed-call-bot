@@ -508,12 +508,19 @@ async function sendWelcomeEmail(plumber, emailService) {
 </body>
 </html>`;
 
-  await resend.emails.send({
-    from:    "Ian from ZeroMissCall <ian@zeromisscall.com>",
-    to:      plumber.email,
-    subject: `Welcome to ZeroMissCall — your trial is active, ${plumber.ownerName}!`,
-    html,
-  });
+  try {
+    const result = await resend.emails.send({
+      from:    "Ian from ZeroMissCall <ian@zeromisscall.com>",
+      to:      plumber.email,
+      subject: `Welcome to ZeroMissCall — your trial is active, ${plumber.ownerName}!`,
+      html,
+    });
+    console.log(`📧 Welcome email sent to ${plumber.email} | ID: ${result.id}`);
+  } catch (err) {
+    console.error(`❌ Welcome email FAILED for ${plumber.email}:`, err.message);
+    console.error(`❌ Full error:`, JSON.stringify(err, null, 2));
+    throw err;
+  }
 }
 
 // ─────────────────────────────────────────────
