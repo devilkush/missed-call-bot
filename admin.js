@@ -417,7 +417,7 @@ async function sendWelcomeEmail(plumber, emailService) {
         <!-- Content -->
         <tr><td style="background:#ffffff;padding:36px;">
           <h1 style="font-family:'Nunito',Arial,sans-serif;font-size:24px;color:#0b1928;margin:0 0 8px 0;">
-            Welcome to ZeroMissCall, ${plumber.ownerName}! 🎉
+            Welcome to ZeroMissCall, ${plumber.ownerName}!
           </h1>
           <p style="font-size:15px;color:#444;line-height:1.7;margin:0 0 24px 0;">
             Your 14-day free trial for <strong>${plumber.businessName}</strong> is now active.
@@ -431,11 +431,11 @@ async function sendWelcomeEmail(plumber, emailService) {
               Here's what happens when someone calls and you miss it:
             </p>
             <p style="font-size:14px;color:#444;line-height:1.8;margin:0;">
-              1️⃣ &nbsp;They hear a friendly voice message<br/>
-              2️⃣ &nbsp;They get a text within seconds<br/>
-              3️⃣ &nbsp;Our AI handles the conversation<br/>
-              4️⃣ &nbsp;You get an alert when a lead is captured<br/>
-              5️⃣ &nbsp;You call them back ready to close the job
+              1. &nbsp;They hear a friendly voice message<br/>
+              2. &nbsp;They get a text within seconds<br/>
+              3. &nbsp;Our AI handles the conversation<br/>
+              4. &nbsp;You get an alert when a lead is captured<br/>
+              5. &nbsp;You call them back ready to close the job
             </p>
           </div>
 
@@ -465,16 +465,16 @@ async function sendWelcomeEmail(plumber, emailService) {
           <!-- Setup nudge -->
           <div style="background:#f0f7ff;border-radius:10px;padding:20px;margin:0 0 24px 0;border-left:4px solid #0b1928;">
             <p style="font-family:'Nunito',Arial,sans-serif;font-size:14px;font-weight:700;color:#0b1928;margin:0 0 10px 0;">
-              ⚙️ Before you go live — takes 2 minutes
+              Before you go live - takes 2 minutes
             </p>
             <p style="font-size:13px;color:#444;line-height:1.8;margin:0 0 14px 0;">
               Your AI needs a few details to give accurate answers to your customers:
             </p>
             <p style="font-size:13px;color:#444;line-height:2;margin:0;">
-              📍 <strong>Service area</strong> — what city/region do you cover?<br/>
-              🕐 <strong>Business hours</strong> — when are you available?<br/>
-              💰 <strong>Average job value</strong> — used to calculate your revenue stats<br/>
-              🔧 <strong>Services</strong> — drain, boiler, leak detection etc.
+              <strong>Service area</strong> — what city/region do you cover?<br/>
+              <strong>Business hours</strong> — when are you available?<br/>
+              <strong>Average job value</strong> — used to calculate your revenue stats<br/>
+              <strong>Services</strong> — drain, boiler, leak detection etc.
             </p>
             <a href="https://missed-call-bot-production.up.railway.app/dashboard/${plumber.dashboardToken}"
               style="display:inline-block;background:#E8791A;color:#fff;font-family:'Nunito',Arial,sans-serif;font-size:13px;font-weight:700;padding:10px 20px;border-radius:8px;text-decoration:none;margin-top:14px;">
@@ -512,7 +512,7 @@ async function sendWelcomeEmail(plumber, emailService) {
     const result = await resend.emails.send({
       from:    "Ian from ZeroMissCall <ian@zeromisscall.com>",
       to:      plumber.email,
-      subject: `Welcome to ZeroMissCall — your trial is active, ${plumber.ownerName}!`,
+      subject: `Welcome to ZeroMissCall - your trial is active, ${plumber.ownerName}!`,
       html,
     });
     console.log(`📧 Welcome email sent to ${plumber.email} | ID: ${result.id}`);
