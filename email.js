@@ -1,700 +1,516 @@
-// ─────────────────────────────────────────────────────────────
-// PHASE 4 - EMAIL INFRASTRUCTURE
-// ZeroMissCall v2
-//
-// HOW TO USE:
-// 1. npm install resend
-// 2. Add RESEND_API_KEY to your .env and Railway environment
-// 3. Save this file as email.js in the same folder as server.js
-// 4. Follow integration instructions at the bottom
-// ─────────────────────────────────────────────────────────────
-
 const { Resend } = require("resend");
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-// ─────────────────────────────────────────────
-// SENDER ADDRESSES
-// ─────────────────────────────────────────────
 const SENDERS = {
   reports: "ZeroMissCall <reports@zeromisscall.com>",
   trial:   "Ian from ZeroMissCall <ian@zeromisscall.com>",
 };
 
-// ─────────────────────────────────────────────
-// BRAND CONSTANTS (matches zeromisscall.com exactly)
-// ─────────────────────────────────────────────
 const BRAND = {
-  navy:       "#0b1928",
-  navyMid:    "#0f2035",
-  orange:     "#E8791A",
-  orangeLight:"#f08e32",
-  green:      "#3ecf8e",
-  textLight:  "#c8dce8",
-  textMuted:  "#6b84a0",
-  white:      "#ffffff",
-  siteUrl:    "https://zeromisscall.com",
-  upgradeUrl: "https://zeromisscall.com/pricing",
+  navy:      "#0b1928",
+  navyMid:   "#0f2035",
+  orange:    "#E8791A",
+  green:     "#3ecf8e",
+  siteUrl:   "https://zeromisscall.com",
+  railwayUrl:"https://missed-call-bot-production.up.railway.app",
 };
 
-// ─────────────────────────────────────────────
-// SHARED EMAIL WRAPPER
-// Navy header with logo, white content area,
-// dark footer - matches site design exactly
-// ─────────────────────────────────────────────
-function wrapEmail(contentHtml, previewText = "") {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="x-apple-disable-message-reformatting" />
-  <title>ZeroMissCall</title>
-  <!--[if mso]>
-  <noscript>
-    <xml><o:OfficeDocumentSettings>
-      <o:PixelsPerInch>96</o:PixelsPerInch>
-    </o:OfficeDocumentSettings></xml>
-  </noscript>
-  <![endif]-->
-  <style>
-    @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&family=DM+Sans:wght@400;500;600&display=swap');
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background-color: #0b1928; font-family: 'DM Sans', Arial, sans-serif; -webkit-text-size-adjust: 100%; }
-    a { color: #E8791A; text-decoration: none; }
-    @media only screen and (max-width: 600px) {
-      .container { width: 100% !important; padding: 0 16px !important; }
-      .stat-block { width: 48% !important; margin-bottom: 12px !important; }
-      .hero-number { font-size: 48px !important; }
-      .cta-button { width: 100% !important; display: block !important; text-align: center !important; }
-    }
-  </style>
-</head>
-<body style="background-color:#0b1928;margin:0;padding:0;">
-  ${previewText ? `<div style="display:none;max-height:0;overflow:hidden;font-size:1px;line-height:1px;color:#0b1928;">${previewText}</div>` : ""}
-
-  <!-- Outer wrapper -->
-  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#0b1928;">
-    <tr>
-      <td align="center" style="padding:32px 16px;">
-
-        <!-- Email container -->
-        <table class="container" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;">
-
-          <!-- HEADER -->
-          <tr>
-            <td style="background:linear-gradient(135deg,#0b1928 0%,#0f2035 100%);border-radius:12px 12px 0 0;padding:28px 36px;text-align:center;border-bottom:3px solid #E8791A;">
-              <a href="${BRAND.siteUrl}" style="text-decoration:none;display:inline-block;"><span style="font-family:'Nunito',Arial,sans-serif;font-size:28px;font-weight:900;color:#E8791A;letter-spacing:-0.5px;">zero<span style="color:#ffffff;">miss</span>call</span></a>
-            </td>
-          </tr>
-
-          <!-- CONTENT -->
-          <tr>
-            <td style="background:#ffffff;padding:0;">
-              ${contentHtml}
-            </td>
-          </tr>
-
-          <!-- FOOTER -->
-          <tr>
-            <td style="background:#0f2035;border-radius:0 0 12px 12px;padding:24px 36px;text-align:center;border-top:1px solid #1a3550;">
-              <p style="font-family:'DM Sans',Arial,sans-serif;font-size:13px;color:#6b84a0;line-height:1.6;margin:0 0 8px 0;">
-                ZeroMissCall &mdash; Never miss a customer again.<br/>
-                <a href="${BRAND.siteUrl}" style="color:#E8791A;">zeromisscall.com</a>
-              </p>
-              <p style="font-family:'DM Sans',Arial,sans-serif;font-size:12px;color:#4a6278;margin:0;">
-                You're receiving this because you have an active ZeroMissCall account.<br/>
-                To update your preferences, <a href="${BRAND.siteUrl}/contact.html" style="color:#6b84a0;text-decoration:underline;">contact us</a>.
-              </p>
-            </td>
-          </tr>
-
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>`;
-}
-
-// ─────────────────────────────────────────────
-// TEMPLATE A - WEEKLY DIGEST
-// Sends every Monday morning
-// Three big numbers, money-first, dead simple
-// ─────────────────────────────────────────────
-function buildWeeklyDigestEmail(plumber, stats) {
-  const {
-    totalConversations,
-    leadsCaptures,
-    estimatedRevenue,
-    weekOf,
-  } = stats;
-
-  const previewText = `Last week: ${totalConversations} missed calls handled, ${leadsCaptures} leads captured.`;
-
-  const content = `
-    <!-- Greeting -->
-    <div style="padding:36px 36px 0;">
-      <p style="font-family:'DM Sans',Arial,sans-serif;font-size:16px;color:#0b1928;line-height:1.6;margin:0 0 6px 0;">
-        Hey ${plumber.ownerName},
-      </p>
-      <p style="font-family:'Nunito',Arial,sans-serif;font-size:22px;font-weight:800;color:#0b1928;line-height:1.3;margin:0 0 24px 0;">
-        Here's your ZeroMissCall weekly summary
-      </p>
-      <p style="font-family:'DM Sans',Arial,sans-serif;font-size:14px;color:#6b84a0;margin:0 0 32px 0;">
-        Week of ${weekOf} &mdash; ${plumber.businessName}
-      </p>
-    </div>
-
-    <!-- Stats row -->
-    <div style="padding:0 36px 32px;">
-      <table width="100%" cellpadding="0" cellspacing="0" border="0">
-        <tr>
-          <!-- Stat 1 -->
-          <td class="stat-block" width="32%" style="text-align:center;background:linear-gradient(135deg,#0b1928,#0f2035);border-radius:10px;padding:20px 12px;border:1px solid #1a3550;">
-            <div style="font-family:'Nunito',Arial,sans-serif;font-size:36px;font-weight:800;color:#E8791A;line-height:1;">
-              ${totalConversations}
-            </div>
-            <div style="font-family:'DM Sans',Arial,sans-serif;font-size:12px;color:#6b84a0;margin-top:6px;text-transform:uppercase;letter-spacing:0.5px;">
-              Missed calls<br/>handled
-            </div>
-          </td>
-          <td width="2%"></td>
-          <!-- Stat 2 -->
-          <td class="stat-block" width="32%" style="text-align:center;background:linear-gradient(135deg,#0b1928,#0f2035);border-radius:10px;padding:20px 12px;border:1px solid #1a3550;">
-            <div style="font-family:'Nunito',Arial,sans-serif;font-size:36px;font-weight:800;color:#3ecf8e;line-height:1;">
-              ${leadsCaptures}
-            </div>
-            <div style="font-family:'DM Sans',Arial,sans-serif;font-size:12px;color:#6b84a0;margin-top:6px;text-transform:uppercase;letter-spacing:0.5px;">
-              Leads<br/>captured
-            </div>
-          </td>
-          <td width="2%"></td>
-          <!-- Stat 3 -->
-          <td class="stat-block" width="32%" style="text-align:center;background:linear-gradient(135deg,#0b1928,#0f2035);border-radius:10px;padding:20px 12px;border:1px solid #1a3550;">
-            <div style="font-family:'Nunito',Arial,sans-serif;font-size:36px;font-weight:800;color:#3ecf8e;line-height:1;">
-              $${estimatedRevenue}
-            </div>
-            <div style="font-family:'DM Sans',Arial,sans-serif;font-size:12px;color:#6b84a0;margin-top:6px;text-transform:uppercase;letter-spacing:0.5px;">
-              Est. revenue<br/>recovered
-            </div>
-          </td>
-        </tr>
-      </table>
-    </div>
-
-    <!-- Divider -->
-    <div style="height:1px;background:#eef0f3;margin:0 36px 28px;"></div>
-
-    <!-- Message -->
-    <div style="padding:0 36px 36px;">
-      <p style="font-family:'DM Sans',Arial,sans-serif;font-size:15px;color:#333;line-height:1.7;margin:0 0 24px 0;">
-        ZeroMissCall handled every one of those missed calls while you were out on the job.
-        ${leadsCaptures > 0
-          ? `<strong>${leadsCaptures} customer${leadsCaptures > 1 ? "s" : ""} gave their details and ${leadsCaptures > 1 ? "are" : "is"} ready to book.</strong>`
-          : "Keep an eye on your texts for any follow-ups."
-        }
-      </p>
-      <p style="font-family:'DM Sans',Arial,sans-serif;font-size:14px;color:#6b84a0;line-height:1.6;margin:0;">
-        Have a great week &mdash; we've got your calls covered.
-      </p>
-    </div>
-  `;
-
-  return {
-    subject: `Your ZeroMissCall Weekly Summary - ${totalConversations} calls handled`,
-    html: wrapEmail(content, previewText),
-  };
-}
-
-// ─────────────────────────────────────────────
-// TEMPLATE B - TRIAL END EMAIL
-// Sends day 13 of trial (day before expiry)
-// Personal tone, shows real conversation snippets,
-// single CTA to upgrade
-// ─────────────────────────────────────────────
-function buildTrialEndEmail(plumber, stats, conversations) {
-  const {
-    totalConversations,
-    leadsCaptures,
-    estimatedRevenue,
-  } = stats;
-
-  const previewText = `Your trial ends tomorrow - here's what ZeroMissCall captured for ${plumber.businessName}.`;
-
-  // Pick up to 2 real conversation snippets
-  const snippets = conversations
-    .filter(c => c.messages && c.messages.length >= 2)
-    .slice(0, 2);
-
-  const snippetHtml = snippets.length > 0
-    ? snippets.map((convo, i) => {
-        const msgs = convo.messages.slice(0, 4);
-        return `
-          <div style="background:#f8f9fa;border-radius:10px;padding:16px 20px;margin-bottom:12px;border-left:3px solid #E8791A;">
-            <div style="font-family:'DM Sans',Arial,sans-serif;font-size:11px;color:#6b84a0;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">
-              Real conversation ${i + 1}
-            </div>
-            ${msgs.map(m => `
-              <div style="margin-bottom:8px;text-align:${m.role === "user" ? "left" : "right"};">
-                <span style="display:inline-block;background:${m.role === "user" ? "#e9ecef" : "#E8791A"};color:${m.role === "user" ? "#333" : "#fff"};padding:7px 12px;border-radius:12px;font-family:'DM Sans',Arial,sans-serif;font-size:13px;max-width:80%;line-height:1.4;">
-                  ${m.content.length > 120 ? m.content.substring(0, 120) + "..." : m.content}
-                </span>
-              </div>
-            `).join("")}
-          </div>
-        `;
-      }).join("")
-    : `<div style="background:#f8f9fa;border-radius:10px;padding:16px 20px;text-align:center;color:#6b84a0;font-family:'DM Sans',Arial,sans-serif;font-size:14px;">
-        No conversations yet - but your number is ready to go the moment a call comes in.
-       </div>`;
-
-  const content = `
-    <!-- Hero -->
-    <div style="background:linear-gradient(135deg,#0b1928 0%,#0f2035 100%);padding:40px 36px;text-align:center;">
-      <div class="hero-number" style="font-family:'Nunito',Arial,sans-serif;font-size:64px;font-weight:800;color:#E8791A;line-height:1;margin-bottom:8px;">
-        ${totalConversations}
-      </div>
-      <div style="font-family:'DM Sans',Arial,sans-serif;font-size:16px;color:#c8dce8;margin-bottom:4px;">
-        missed calls answered while you were on the job
-      </div>
-      ${estimatedRevenue > 0
-        ? `<div style="font-family:'Nunito',Arial,sans-serif;font-size:20px;font-weight:700;color:#3ecf8e;margin-top:12px;">
-            Estimated $${estimatedRevenue} in jobs recovered
-           </div>`
-        : ""
-      }
-    </div>
-
-    <!-- Body -->
-    <div style="padding:36px 36px 0;">
-      <p style="font-family:'DM Sans',Arial,sans-serif;font-size:16px;color:#0b1928;line-height:1.6;margin:0 0 8px 0;">
-        Hey ${plumber.ownerName},
-      </p>
-      <p style="font-family:'Nunito',Arial,sans-serif;font-size:20px;font-weight:800;color:#0b1928;line-height:1.3;margin:0 0 20px 0;">
-        Your ZeroMissCall trial ends tomorrow.
-      </p>
-      <p style="font-family:'DM Sans',Arial,sans-serif;font-size:15px;color:#444;line-height:1.7;margin:0 0 28px 0;">
-        During your trial, ZeroMissCall replied to <strong>${totalConversations} missed call${totalConversations !== 1 ? "s" : ""}</strong>
-        ${leadsCaptures > 0 ? ` and captured <strong>${leadsCaptures} lead${leadsCaptures !== 1 ? "s" : ""}</strong> with full contact details` : ""}.
-        Here's what some of those conversations looked like:
-      </p>
-    </div>
-
-    <!-- Conversation snippets -->
-    <div style="padding:0 36px 28px;">
-      ${snippetHtml}
-      <p style="font-family:'DM Sans',Arial,sans-serif;font-size:12px;color:#6b84a0;margin-top:8px;">
-        Customer numbers hidden for privacy.
-      </p>
-    </div>
-
-    <!-- Divider -->
-    <div style="height:1px;background:#eef0f3;margin:0 36px 28px;"></div>
-
-    <!-- CTA -->
-    <div style="padding:0 36px 36px;text-align:center;">
-      <p style="font-family:'Nunito',Arial,sans-serif;font-size:18px;font-weight:700;color:#0b1928;margin:0 0 8px 0;">
-        Keep ZeroMissCall working for ${plumber.businessName}
-      </p>
-      <p style="font-family:'DM Sans',Arial,sans-serif;font-size:14px;color:#6b84a0;margin:0 0 24px 0;">
-        $69/month &mdash; cancel anytime &mdash; no contracts
-      </p>
-      <a href="https://missed-call-bot-production.up.railway.app/billing/create-checkout/${plumber.dashboardToken}" class="cta-button" style="display:inline-block;background:#E8791A;color:#ffffff;font-family:'Nunito',Arial,sans-serif;font-size:16px;font-weight:700;padding:16px 40px;border-radius:8px;text-decoration:none;">
-        Keep ZeroMissCall Active &rarr;
-      </a>
-      <p style="font-family:'DM Sans',Arial,sans-serif;font-size:13px;color:#6b84a0;margin-top:16px;line-height:1.5;">
-        If you don't upgrade, your number stops responding to missed calls tomorrow.<br/>
-        Questions? Reply to this email - Ian reads every one.
-      </p>
-    </div>
-  `;
-
-  return {
-    subject: `Your trial ends tomorrow - ${totalConversations} calls handled for ${plumber.businessName}`,
-    html: wrapEmail(content, previewText),
-  };
-}
-
-// ─────────────────────────────────────────────
-// TEMPLATE C - MONTHLY REPORT
-// Sends last day of each month
-// 4 stats, top conversation, job type breakdown
-// Price right-aligned, professional
-// ─────────────────────────────────────────────
-function buildMonthlyReportEmail(plumber, stats, monthName) {
-  const {
-    totalConversations,
-    leadsCaptures,
-    emergencies,
-    estimatedRevenue,
-    topJobTypes,
-    bestConvo,
-  } = stats;
-
-  const previewText = `${plumber.businessName} - your ${monthName} ZeroMissCall report. Estimated $${estimatedRevenue} recovered.`;
-
-  const bestConvoHtml = bestConvo && bestConvo.messages
-    ? `
-      <div style="background:#f8f9fa;border-radius:10px;padding:16px 20px;margin-top:8px;border-left:3px solid #3ecf8e;">
-        <div style="font-family:'DM Sans',Arial,sans-serif;font-size:11px;color:#6b84a0;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">
-          Best conversation this month
-        </div>
-        ${bestConvo.messages.slice(0, 6).map(m => `
-          <div style="margin-bottom:8px;text-align:${m.role === "user" ? "left" : "right"};">
-            <span style="display:inline-block;background:${m.role === "user" ? "#e9ecef" : "#E8791A"};color:${m.role === "user" ? "#333" : "#fff"};padding:7px 12px;border-radius:12px;font-family:'DM Sans',Arial,sans-serif;font-size:13px;max-width:80%;line-height:1.4;">
-              ${m.content.length > 120 ? m.content.substring(0, 120) + "..." : m.content}
-            </span>
-          </div>
-        `).join("")}
-        ${bestConvo.leadCaptured
-          ? `<div style="margin-top:10px;font-family:'DM Sans',Arial,sans-serif;font-size:12px;color:#3ecf8e;">Lead captured - all 3 details collected Lead captured - all 3 details collected</div>`
-          : ""
-        }
-      </div>`
+// -------------------------------------------------
+// WRAP EMAIL
+// Rock-solid mobile email wrapper
+// Tested against Gmail iOS, Apple Mail, Outlook
+// -------------------------------------------------
+function wrapEmail(contentHtml, previewText) {
+  const preview = previewText
+    ? '<div style="display:none;max-height:0;overflow:hidden;font-size:1px;color:#0b1928;">' + previewText + '</div>'
     : "";
 
-  const jobTypesHtml = topJobTypes && topJobTypes.length > 0
-    ? `
-      <div style="margin-top:20px;">
-        <p style="font-family:'Nunito',Arial,sans-serif;font-size:14px;font-weight:700;color:#0b1928;margin:0 0 10px 0;">
-          Top job types this month
-        </p>
-        ${topJobTypes.map(jt => `
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #eee;">
-            <span style="font-family:'DM Sans',Arial,sans-serif;font-size:14px;color:#444;text-transform:capitalize;">${jt.type}</span>
-            <span style="font-family:'Nunito',Arial,sans-serif;font-size:14px;font-weight:700;color:#E8791A;">${jt.count} enquir${jt.count === 1 ? "y" : "ies"}</span>
-          </div>
-        `).join("")}
-      </div>`
-    : "";
+  return '<!DOCTYPE html>' +
+'<html lang="en" xmlns="http://www.w3.org/1999/xhtml">' +
+'<head>' +
+'<meta charset="UTF-8" />' +
+'<meta name="viewport" content="width=device-width, initial-scale=1.0" />' +
+'<meta http-equiv="X-UA-Compatible" content="IE=edge" />' +
+'<meta name="x-apple-disable-message-reformatting" />' +
+'<meta name="color-scheme" content="light" />' +
+'<meta name="supported-color-schemes" content="light" />' +
+'<title>ZeroMissCall</title>' +
+'<style>' +
+':root { color-scheme: light only; supported-color-schemes: light only; }' +
+'body { margin:0!important; padding:0!important; background-color:#f0f4f8!important; -webkit-text-size-adjust:100%; }' +
+'table { border-collapse:collapse; mso-table-lspace:0pt; mso-table-rspace:0pt; }' +
+'img { border:0; height:auto; line-height:100%; outline:none; text-decoration:none; -ms-interpolation-mode:bicubic; }' +
+'@media only screen and (max-width:620px) {' +
+'  .email-container { width:100%!important; }' +
+'  .content-pad { padding:24px 20px!important; }' +
+'  .header-pad { padding:24px 20px!important; }' +
+'  .footer-pad { padding:20px!important; }' +
+'  .stat-col { display:inline-block!important; width:47%!important; margin-bottom:12px!important; }' +
+'  .btn-full { width:100%!important; display:block!important; text-align:center!important; box-sizing:border-box!important; }' +
+'}' +
+'@media (prefers-color-scheme: dark) {' +
+'  body { background-color:#f0f4f8!important; }' +
+'  .email-body { background-color:#ffffff!important; color:#333333!important; }' +
+'  .email-text { color:#333333!important; }' +
+'  .email-muted { color:#666666!important; }' +
+'}' +
+'</style>' +
+'</head>' +
+'<body style="margin:0;padding:0;background-color:#f0f4f8;">' +
+preview +
+'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f0f4f8;">' +
+'<tr><td align="center" style="padding:32px 16px;">' +
 
-  const content = `
-    <!-- Hero revenue -->
-    <div style="background:linear-gradient(135deg,#0b1928 0%,#0f2035 100%);padding:40px 36px;text-align:center;">
-      <div style="font-family:'DM Sans',Arial,sans-serif;font-size:13px;color:#6b84a0;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">
-        ${monthName} Report &mdash; ${plumber.businessName}
-      </div>
-      <div style="font-family:'Nunito',Arial,sans-serif;font-size:14px;color:#c8dce8;margin-bottom:4px;">
-        Estimated revenue recovered
-      </div>
-      <div class="hero-number" style="font-family:'Nunito',Arial,sans-serif;font-size:64px;font-weight:800;color:#3ecf8e;line-height:1;">
-        $${estimatedRevenue}
-      </div>
-      <div style="font-family:'DM Sans',Arial,sans-serif;font-size:13px;color:#6b84a0;margin-top:8px;">
-        Based on ${totalConversations} missed calls x $${plumber.averageJobValue || 250} avg job value
-      </div>
-    </div>
+'<table role="presentation" class="email-container" width="580" cellpadding="0" cellspacing="0" border="0" style="max-width:580px;width:100%;">' +
 
-    <!-- 4 stats -->
-    <div style="padding:32px 36px 0;">
-      <table width="100%" cellpadding="0" cellspacing="0" border="0">
-        <tr>
-          <td class="stat-block" width="23%" style="text-align:center;background:#f8f9fa;border-radius:10px;padding:16px 8px;border:1px solid #eef0f3;">
-            <div style="font-family:'Nunito',Arial,sans-serif;font-size:28px;font-weight:800;color:#E8791A;line-height:1;">${totalConversations}</div>
-            <div style="font-family:'DM Sans',Arial,sans-serif;font-size:11px;color:#6b84a0;margin-top:4px;line-height:1.3;">Missed calls<br/>handled</div>
-          </td>
-          <td width="2%"></td>
-          <td class="stat-block" width="23%" style="text-align:center;background:#f8f9fa;border-radius:10px;padding:16px 8px;border:1px solid #eef0f3;">
-            <div style="font-family:'Nunito',Arial,sans-serif;font-size:28px;font-weight:800;color:#3ecf8e;line-height:1;">${leadsCaptures}</div>
-            <div style="font-family:'DM Sans',Arial,sans-serif;font-size:11px;color:#6b84a0;margin-top:4px;line-height:1.3;">Leads<br/>captured</div>
-          </td>
-          <td width="2%"></td>
-          <td class="stat-block" width="23%" style="text-align:center;background:#f8f9fa;border-radius:10px;padding:16px 8px;border:1px solid #eef0f3;">
-            <div style="font-family:'Nunito',Arial,sans-serif;font-size:28px;font-weight:800;color:#0b1928;line-height:1;">${Math.round((leadsCaptures / Math.max(totalConversations, 1)) * 100)}%</div>
-            <div style="font-family:'DM Sans',Arial,sans-serif;font-size:11px;color:#6b84a0;margin-top:4px;line-height:1.3;">Lead<br/>capture rate</div>
-          </td>
-          <td width="2%"></td>
-          <td class="stat-block" width="23%" style="text-align:center;background:#f8f9fa;border-radius:10px;padding:16px 8px;border:1px solid ${emergencies > 0 ? "#fed7d7" : "#eef0f3"};">
-            <div style="font-family:'Nunito',Arial,sans-serif;font-size:28px;font-weight:800;color:${emergencies > 0 ? "#e53e3e" : "#0b1928"};line-height:1;">${emergencies}</div>
-            <div style="font-family:'DM Sans',Arial,sans-serif;font-size:11px;color:#6b84a0;margin-top:4px;line-height:1.3;">Emergency<br/>alerts</div>
-          </td>
-        </tr>
-      </table>
-    </div>
+'<!-- HEADER -->' +
+'<tr><td style="background-color:#0b1928;border-radius:12px 12px 0 0;padding:28px 40px;text-align:center;border-bottom:3px solid #E8791A;" class="header-pad">' +
+'<span style="font-family:Arial,sans-serif;font-size:26px;font-weight:900;color:#E8791A;letter-spacing:-0.5px;">zero</span>' +
+'<span style="font-family:Arial,sans-serif;font-size:26px;font-weight:900;color:#ffffff;letter-spacing:-0.5px;">miss</span>' +
+'<span style="font-family:Arial,sans-serif;font-size:26px;font-weight:900;color:#E8791A;letter-spacing:-0.5px;">call</span>' +
+'</td></tr>' +
 
-    <!-- Best conversation + job types -->
-    <div style="padding:24px 36px;">
-      ${bestConvoHtml}
-      ${jobTypesHtml}
-    </div>
+'<!-- CONTENT -->' +
+'<tr><td class="email-body" style="background-color:#ffffff;">' +
+contentHtml +
+'</td></tr>' +
 
-    <!-- Divider -->
-    <div style="height:1px;background:#eef0f3;margin:0 36px 24px;"></div>
+'<!-- FOOTER -->' +
+'<tr><td style="background-color:#0f2035;border-radius:0 0 12px 12px;padding:24px 40px;text-align:center;" class="footer-pad">' +
+'<p style="font-family:Arial,sans-serif;font-size:13px;color:#8ba4bb;line-height:1.6;margin:0 0 6px 0;">' +
+'ZeroMissCall &mdash; Never miss a customer again.<br/>' +
+'<a href="https://zeromisscall.com" style="color:#E8791A;text-decoration:none;">zeromisscall.com</a>' +
+'</p>' +
+'<p style="font-family:Arial,sans-serif;font-size:12px;color:#4a6278;margin:0;">' +
+'You are receiving this because you have an active ZeroMissCall account.<br/>' +
+'To update your preferences, <a href="https://zeromisscall.com/contact.html" style="color:#8ba4bb;">contact us</a>.' +
+'</p>' +
+'</td></tr>' +
 
-    <!-- Billing footer -->
-    <div style="padding:0 36px 36px;">
-      <table width="100%" cellpadding="0" cellspacing="0" border="0">
-        <tr>
-          <td style="font-family:'DM Sans',Arial,sans-serif;font-size:14px;color:#444;">
-            Next billing date
-          </td>
-          <td style="text-align:right;font-family:'Nunito',Arial,sans-serif;font-size:14px;font-weight:700;color:#0b1928;">
-            1st of next month
-          </td>
-        </tr>
-        <tr>
-          <td style="font-family:'DM Sans',Arial,sans-serif;font-size:14px;color:#444;padding-top:8px;">
-            Monthly subscription
-          </td>
-          <td style="text-align:right;font-family:'Nunito',Arial,sans-serif;font-size:14px;font-weight:700;color:#0b1928;padding-top:8px;">
-            $69.00
-          </td>
-        </tr>
-      </table>
-      <p style="font-family:'DM Sans',Arial,sans-serif;font-size:13px;color:#6b84a0;margin-top:16px;line-height:1.6;">
-        Questions about your account? Reply to this email or visit
-        <a href="${BRAND.siteUrl}/contact.html" style="color:#E8791A;">zeromisscall.com/contact</a>
-      </p>
-    </div>
-  `;
-
-  return {
-    subject: `${plumber.businessName} - Your ${monthName} ZeroMissCall Report`,
-    html: wrapEmail(content, previewText),
-  };
+'</table>' +
+'</td></tr></table>' +
+'</body></html>';
 }
 
+// Helper: orange CTA button
+function ctaButton(url, text, style) {
+  var bg = style === "dark" ? "#0b1928" : "#E8791A";
+  var textColor = "#ffffff";
+  return '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;">' +
+    '<tr><td style="background-color:' + bg + ';border-radius:8px;">' +
+    '<a href="' + url + '" style="display:inline-block;background-color:' + bg + ';color:' + textColor + ';font-family:Arial,sans-serif;font-size:14px;font-weight:700;padding:13px 28px;border-radius:8px;text-decoration:none;">' + text + '</a>' +
+    '</td></tr></table>';
+}
+
+// Helper: info box
+function infoBox(borderColor, titleHtml, bodyHtml) {
+  return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px;">' +
+    '<tr><td style="background-color:#f8f9fa;border-radius:8px;padding:18px 20px;border-left:4px solid ' + borderColor + ';">' +
+    (titleHtml ? '<p style="font-family:Arial,sans-serif;font-size:14px;font-weight:700;color:#0b1928;margin:0 0 10px 0;">' + titleHtml + '</p>' : '') +
+    '<p style="font-family:Arial,sans-serif;font-size:14px;color:#444444;line-height:1.7;margin:0;">' + bodyHtml + '</p>' +
+    '</td></tr></table>';
+}
 
 // -------------------------------------------------
 // TEMPLATE D - WELCOME EMAIL
-// Sends immediately on signup
 // -------------------------------------------------
 function buildWelcomeEmail(plumber, trialEnd) {
-  const previewText = "Your ZeroMissCall trial is active. Here is everything you need to get started.";
+  var dashUrl = BRAND.railwayUrl + "/dashboard/" + plumber.dashboardToken;
 
-  const content = `
-    <div style="padding:36px 36px 0;">
-      <p style="font-family:'Nunito',Arial,sans-serif;font-size:24px;font-weight:900;color:#0b1928;margin:0 0 8px 0;">
-        Welcome, ${plumber.ownerName}!
-      </p>
-      <p style="font-size:15px;color:#444;line-height:1.7;margin:0 0 24px 0;">
-        Your 14-day free trial for <strong>${plumber.businessName}</strong> is now active.
-        ZeroMissCall will automatically reply to every missed call starting right now.
-      </p>
-    </div>
+  var content =
+    '<div style="padding:32px 40px 0;" class="content-pad">' +
+    '<p style="font-family:Arial,sans-serif;font-size:22px;font-weight:900;color:#0b1928;margin:0 0 10px 0;">' +
+    'Welcome, ' + plumber.ownerName + '!</p>' +
+    '<p style="font-family:Arial,sans-serif;font-size:15px;color:#444444;line-height:1.7;margin:0 0 24px 0;">' +
+    'Your 14-day free trial for <strong>' + plumber.businessName + '</strong> is now active. ' +
+    'ZeroMissCall will automatically reply to every missed call starting right now.' +
+    '</p></div>' +
 
-    <!-- What happens -->
-    <div style="padding:0 36px 24px;">
-      <div style="background:#f8f9fa;border-radius:10px;padding:20px;border-left:4px solid #E8791A;">
-        <p style="font-family:'Nunito',Arial,sans-serif;font-size:14px;font-weight:700;color:#0b1928;margin:0 0 12px 0;">
-          Here is what happens when someone calls and you miss it:
-        </p>
-        <p style="font-size:14px;color:#444;line-height:2;margin:0;">
-          1. &nbsp; They hear a friendly voice message<br/>
-          2. &nbsp; They get a text within 60 seconds<br/>
-          3. &nbsp; Our AI handles the conversation<br/>
-          4. &nbsp; You get an alert when a lead is captured<br/>
-          5. &nbsp; You call them back ready to close the job
-        </p>
-      </div>
-    </div>
+    '<div style="padding:0 40px 20px;" class="content-pad">' +
+    infoBox('#E8791A',
+      'Here is what happens when someone calls and you miss it:',
+      '1. &nbsp;They hear a friendly voice message<br/>' +
+      '2. &nbsp;They get a text within 60 seconds<br/>' +
+      '3. &nbsp;Our AI handles the conversation<br/>' +
+      '4. &nbsp;You get an alert when a lead is captured<br/>' +
+      '5. &nbsp;You call them back ready to close the job'
+    ) +
+    '</div>' +
 
-    <!-- Trial info -->
-    <div style="padding:0 36px 24px;">
-      <div style="background:#fff8f0;border-radius:10px;padding:20px;border-left:4px solid #E8791A;">
-        <p style="font-size:14px;color:#744210;margin:0;line-height:1.7;">
-          <strong>Your trial runs until ${trialEnd}.</strong>
-          After that it is just $69/month - cancel anytime, no contracts.
-          We will email you the day before your trial ends with a full summary.
-        </p>
-      </div>
-    </div>
+    '<div style="padding:0 40px 20px;" class="content-pad">' +
+    infoBox('#E8791A',
+      '',
+      '<strong>Your trial runs until ' + trialEnd + '.</strong> ' +
+      'After that it is just $69/month - cancel anytime, no contracts. ' +
+      'We will email you the day before your trial ends with a full summary.'
+    ) +
+    '</div>' +
 
-    <div style="height:1px;background:#eef0f3;margin:0 36px 24px;"></div>
+    '<div style="height:1px;background-color:#eeeeee;margin:0 40px 20px;" class="content-pad"></div>' +
 
-    <!-- Dashboard CTA -->
-    <div style="padding:0 36px 24px;">
-      <div style="background:#f8f9fa;border-radius:10px;padding:20px;border-left:4px solid #3ecf8e;">
-        <p style="font-family:'Nunito',Arial,sans-serif;font-size:14px;font-weight:700;color:#0b1928;margin:0 0 8px 0;">
-          Your personal dashboard
-        </p>
-        <p style="font-size:13px;color:#444;line-height:1.6;margin:0 0 14px 0;">
-          Bookmark this link. It is how you view your conversations, captured leads, and account settings.
-        </p>
-        <a href="https://missed-call-bot-production.up.railway.app/dashboard/${plumber.dashboardToken}"
-          style="display:inline-block;background:#0b1928;color:#fff;font-family:'Nunito',Arial,sans-serif;font-size:14px;font-weight:700;padding:12px 24px;border-radius:8px;text-decoration:none;">
-          View My Dashboard
-        </a>
-      </div>
-    </div>
+    '<div style="padding:0 40px 20px;" class="content-pad">' +
+    infoBox('#3ecf8e',
+      'Your personal dashboard',
+      'Bookmark this link. It is how you view your conversations, captured leads, and account settings.' +
+      ctaButton(dashUrl, 'View My Dashboard', 'dark')
+    ) +
+    '</div>' +
 
-    <!-- Setup nudge -->
-    <div style="padding:0 36px 24px;">
-      <div style="background:#f0f7ff;border-radius:10px;padding:20px;border-left:4px solid #0b1928;">
-        <p style="font-family:'Nunito',Arial,sans-serif;font-size:14px;font-weight:700;color:#0b1928;margin:0 0 10px 0;">
-          Before you go live - takes 2 minutes
-        </p>
-        <p style="font-size:13px;color:#444;line-height:1.8;margin:0 0 14px 0;">
-          Log in to your dashboard and set:<br/>
-          <strong>Service area</strong> - what city or region do you cover?<br/>
-          <strong>Business hours</strong> - when are you available?<br/>
-          <strong>Average job value</strong> - used to calculate your revenue stats<br/>
-          <strong>Services</strong> - drain, boiler, leak detection etc.
-        </p>
-        <a href="https://missed-call-bot-production.up.railway.app/dashboard/${plumber.dashboardToken}"
-          style="display:inline-block;background:#E8791A;color:#fff;font-family:'Nunito',Arial,sans-serif;font-size:13px;font-weight:700;padding:10px 20px;border-radius:8px;text-decoration:none;">
-          Update My Settings
-        </a>
-      </div>
-    </div>
+    '<div style="padding:0 40px 20px;" class="content-pad">' +
+    infoBox('#0b1928',
+      'Before you go live - takes 2 minutes',
+      'Log in to your dashboard and update these details so the AI gives accurate answers:<br/><br/>' +
+      '<strong>Service area</strong> - what city or region do you cover?<br/>' +
+      '<strong>Business hours</strong> - when are you available?<br/>' +
+      '<strong>Average job value</strong> - used for revenue stats<br/>' +
+      '<strong>Services</strong> - drain, boiler, leak detection etc.' +
+      ctaButton(dashUrl, 'Update My Settings', 'orange')
+    ) +
+    '</div>' +
 
-    <!-- Visit site CTA -->
-    <div style="padding:0 36px 36px;text-align:center;">
-      <a href="https://zeromisscall.com"
-        style="display:inline-block;background:#E8791A;color:#fff;font-family:'Nunito',Arial,sans-serif;font-size:16px;font-weight:700;padding:14px 36px;border-radius:8px;text-decoration:none;">
-        Visit ZeroMissCall
-      </a>
-      <p style="font-size:14px;color:#6b84a0;line-height:1.6;margin:20px 0 0 0;">
-        Questions? Just reply to this email - Ian reads every one.<br/>
-        <strong style="color:#444;">Ian from ZeroMissCall</strong>
-      </p>
-    </div>
-  `;
+    '<div style="padding:0 40px 32px;text-align:center;" class="content-pad">' +
+    '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto 20px;">' +
+    '<tr><td style="background-color:#E8791A;border-radius:8px;">' +
+    '<a href="https://zeromisscall.com" style="display:inline-block;background-color:#E8791A;color:#ffffff;font-family:Arial,sans-serif;font-size:16px;font-weight:700;padding:14px 36px;border-radius:8px;text-decoration:none;">Visit ZeroMissCall</a>' +
+    '</td></tr></table>' +
+    '<p style="font-family:Arial,sans-serif;font-size:14px;color:#666666;line-height:1.6;margin:0;">' +
+    'Questions? Just reply to this email - Ian reads every one.<br/>' +
+    '<strong style="color:#333333;">Ian from ZeroMissCall</strong>' +
+    '</p></div>';
 
   return {
     subject: "Welcome to ZeroMissCall - your trial is active, " + plumber.ownerName + "!",
-    html: wrapEmail(content, previewText),
+    html: wrapEmail(content, "Your ZeroMissCall trial is active. Here is everything you need to get started."),
   };
 }
 
 async function sendWelcomeEmail(plumber) {
   if (!plumber.email) return;
-  const trialEnd = plumber.trialEndDate
+  var trialEnd = plumber.trialEndDate
     ? new Date(plumber.trialEndDate).toLocaleDateString("en-US", {
         weekday: "long", year: "numeric", month: "long", day: "numeric",
       })
     : "in 14 days";
-
-  const { subject, html } = buildWelcomeEmail(plumber, trialEnd);
+  var _ref = buildWelcomeEmail(plumber, trialEnd);
+  var subject = _ref.subject;
+  var html = _ref.html;
   try {
-    const result = await resend.emails.send({
-      from:    SENDERS.trial,
-      to:      plumber.email,
-      subject,
-      html,
+    var result = await resend.emails.send({
+      from: SENDERS.trial,
+      to: plumber.email,
+      subject: subject,
+      html: html,
     });
-    console.log("Welcome email sent to " + plumber.email + " | ID: " + result.id);
+    console.log("Welcome email sent to " + plumber.email);
     return result;
   } catch (err) {
-    console.error("Welcome email FAILED for " + plumber.email + ": " + err.message);
+    console.error("Welcome email FAILED: " + err.message);
     throw err;
   }
 }
 
-// ─────────────────────────────────────────────
-// SEND FUNCTIONS
-// ─────────────────────────────────────────────
+// -------------------------------------------------
+// TEMPLATE A - WEEKLY DIGEST
+// -------------------------------------------------
+function buildWeeklyDigestEmail(plumber, stats) {
+  var totalConversations = stats.totalConversations;
+  var leadsCaptures = stats.leadsCaptures;
+  var estimatedRevenue = stats.estimatedRevenue;
+  var weekOf = stats.weekOf;
 
-async function sendWeeklyDigest(plumber, stats) {
-  if (!plumber.email) {
-    console.warn(`!  No email for plumber ${plumber.businessName} - skipping weekly digest`);
-    return;
+  var content =
+    '<div style="padding:32px 40px 20px;" class="content-pad">' +
+    '<p style="font-family:Arial,sans-serif;font-size:15px;color:#444444;margin:0 0 4px 0;">Hey ' + plumber.ownerName + ',</p>' +
+    '<p style="font-family:Arial,sans-serif;font-size:20px;font-weight:900;color:#0b1928;margin:0 0 6px 0;">Here is your ZeroMissCall weekly summary</p>' +
+    '<p style="font-family:Arial,sans-serif;font-size:13px;color:#888888;margin:0 0 28px 0;">Week of ' + weekOf + ' &mdash; ' + plumber.businessName + '</p>' +
+    '</div>' +
+
+    '<div style="padding:0 40px 28px;" class="content-pad">' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">' +
+    '<tr>' +
+    '<td class="stat-col" align="center" style="background-color:#0b1928;border-radius:10px;padding:20px 12px;border:1px solid #1a3550;width:32%;">' +
+    '<div style="font-family:Arial,sans-serif;font-size:34px;font-weight:900;color:#E8791A;line-height:1;">' + totalConversations + '</div>' +
+    '<div style="font-family:Arial,sans-serif;font-size:12px;color:#6b84a0;margin-top:6px;text-transform:uppercase;letter-spacing:0.5px;">Missed calls<br/>handled</div>' +
+    '</td>' +
+    '<td width="2%"></td>' +
+    '<td class="stat-col" align="center" style="background-color:#0b1928;border-radius:10px;padding:20px 12px;border:1px solid #1a3550;width:32%;">' +
+    '<div style="font-family:Arial,sans-serif;font-size:34px;font-weight:900;color:#3ecf8e;line-height:1;">' + leadsCaptures + '</div>' +
+    '<div style="font-family:Arial,sans-serif;font-size:12px;color:#6b84a0;margin-top:6px;text-transform:uppercase;letter-spacing:0.5px;">Leads<br/>captured</div>' +
+    '</td>' +
+    '<td width="2%"></td>' +
+    '<td class="stat-col" align="center" style="background-color:#0b1928;border-radius:10px;padding:20px 12px;border:1px solid #1a3550;width:32%;">' +
+    '<div style="font-family:Arial,sans-serif;font-size:34px;font-weight:900;color:#3ecf8e;line-height:1;">$' + estimatedRevenue + '</div>' +
+    '<div style="font-family:Arial,sans-serif;font-size:12px;color:#6b84a0;margin-top:6px;text-transform:uppercase;letter-spacing:0.5px;">Est. revenue<br/>recovered</div>' +
+    '</td>' +
+    '</tr>' +
+    '</table>' +
+    '</div>' +
+
+    '<div style="height:1px;background-color:#eeeeee;margin:0 40px 24px;"></div>' +
+
+    '<div style="padding:0 40px 36px;" class="content-pad">' +
+    '<p style="font-family:Arial,sans-serif;font-size:15px;color:#333333;line-height:1.7;margin:0 0 16px 0;">' +
+    'ZeroMissCall handled every one of those missed calls while you were out on the job. ' +
+    (leadsCaptures > 0
+      ? '<strong>' + leadsCaptures + ' customer' + (leadsCaptures > 1 ? 's' : '') + ' gave their details and ' + (leadsCaptures > 1 ? 'are' : 'is') + ' ready to book.</strong>'
+      : 'Keep an eye on your texts for any follow-ups.') +
+    '</p>' +
+    '<p style="font-family:Arial,sans-serif;font-size:14px;color:#888888;line-height:1.6;margin:0;">Have a great week - we have got your calls covered.</p>' +
+    '</div>';
+
+  return {
+    subject: "Your ZeroMissCall Weekly Summary - " + totalConversations + " calls handled",
+    html: wrapEmail(content, "Last week: " + totalConversations + " missed calls handled, " + leadsCaptures + " leads captured."),
+  };
+}
+
+// -------------------------------------------------
+// TEMPLATE B - TRIAL END EMAIL
+// -------------------------------------------------
+function buildTrialEndEmail(plumber, stats, conversations) {
+  var totalConversations = stats.totalConversations;
+  var leadsCaptures = stats.leadsCaptures;
+  var estimatedRevenue = stats.estimatedRevenue;
+  var checkoutUrl = BRAND.railwayUrl + "/billing/create-checkout/" + plumber.dashboardToken;
+
+  var snippets = conversations
+    .filter(function(c) { return c.messages && c.messages.length >= 2; })
+    .slice(0, 1);
+
+  var snippetHtml = '';
+  if (snippets.length > 0) {
+    var msgs = snippets[0].messages.slice(0, 4);
+    snippetHtml =
+      '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px;">' +
+      '<tr><td style="background-color:#f8f9fa;border-radius:8px;padding:16px 20px;border-left:3px solid #E8791A;">' +
+      '<p style="font-family:Arial,sans-serif;font-size:11px;color:#888888;text-transform:uppercase;letter-spacing:0.5px;margin:0 0 10px 0;">Real conversation</p>' +
+      msgs.map(function(m) {
+        return '<p style="font-family:Arial,sans-serif;font-size:13px;background-color:' +
+          (m.role === 'user' ? '#e9ecef' : '#E8791A') +
+          ';color:' + (m.role === 'user' ? '#333333' : '#ffffff') +
+          ';padding:8px 12px;border-radius:10px;display:inline-block;max-width:80%;margin:0 0 8px ' +
+          (m.role === 'user' ? '0' : 'auto') + ';line-height:1.4;">' +
+          (m.content.length > 100 ? m.content.substring(0, 100) + '...' : m.content) +
+          '</p><br/>';
+      }).join('') +
+      '<p style="font-family:Arial,sans-serif;font-size:12px;color:#888888;margin:8px 0 0 0;">Customer numbers hidden for privacy.</p>' +
+      '</td></tr></table>';
   }
-  const { subject, html } = buildWeeklyDigestEmail(plumber, stats);
+
+  var content =
+    '<div style="background-color:#0b1928;padding:36px 40px;text-align:center;" class="content-pad">' +
+    '<div style="font-family:Arial,sans-serif;font-size:60px;font-weight:900;color:#E8791A;line-height:1;margin-bottom:8px;">' + totalConversations + '</div>' +
+    '<div style="font-family:Arial,sans-serif;font-size:15px;color:#c8dce8;margin-bottom:8px;">missed calls answered while you were on the job</div>' +
+    (estimatedRevenue > 0 ? '<div style="font-family:Arial,sans-serif;font-size:18px;font-weight:700;color:#3ecf8e;">Estimated $' + estimatedRevenue + ' in jobs recovered</div>' : '') +
+    '</div>' +
+
+    '<div style="padding:32px 40px 0;" class="content-pad">' +
+    '<p style="font-family:Arial,sans-serif;font-size:15px;color:#444444;margin:0 0 6px 0;">Hey ' + plumber.ownerName + ',</p>' +
+    '<p style="font-family:Arial,sans-serif;font-size:20px;font-weight:900;color:#0b1928;margin:0 0 16px 0;">Your ZeroMissCall trial ends tomorrow.</p>' +
+    '<p style="font-family:Arial,sans-serif;font-size:15px;color:#444444;line-height:1.7;margin:0 0 24px 0;">' +
+    'During your trial, ZeroMissCall replied to <strong>' + totalConversations + ' missed call' + (totalConversations !== 1 ? 's' : '') + '</strong>' +
+    (leadsCaptures > 0 ? ' and captured <strong>' + leadsCaptures + ' lead' + (leadsCaptures !== 1 ? 's' : '') + '</strong> with full contact details' : '') +
+    '. Here is what some of those conversations looked like:' +
+    '</p>' +
+    '</div>' +
+
+    '<div style="padding:0 40px 20px;" class="content-pad">' + snippetHtml + '</div>' +
+
+    '<div style="height:1px;background-color:#eeeeee;margin:0 40px 28px;"></div>' +
+
+    '<div style="padding:0 40px 36px;text-align:center;" class="content-pad">' +
+    '<p style="font-family:Arial,sans-serif;font-size:18px;font-weight:700;color:#0b1928;margin:0 0 6px 0;">Keep ZeroMissCall working for ' + plumber.businessName + '</p>' +
+    '<p style="font-family:Arial,sans-serif;font-size:14px;color:#888888;margin:0 0 20px 0;">$69/month - cancel anytime - no contracts</p>' +
+    '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto 16px;">' +
+    '<tr><td style="background-color:#E8791A;border-radius:8px;">' +
+    '<a href="' + checkoutUrl + '" style="display:inline-block;background-color:#E8791A;color:#ffffff;font-family:Arial,sans-serif;font-size:16px;font-weight:700;padding:14px 36px;border-radius:8px;text-decoration:none;">Keep ZeroMissCall Active</a>' +
+    '</td></tr></table>' +
+    '<p style="font-family:Arial,sans-serif;font-size:13px;color:#888888;line-height:1.5;margin:0;">' +
+    'If you do not upgrade, your number stops responding to missed calls tomorrow.<br/>' +
+    'Questions? Reply to this email - Ian reads every one.' +
+    '</p>' +
+    '</div>';
+
+  return {
+    subject: "Your trial ends tomorrow - " + totalConversations + " calls handled for " + plumber.businessName,
+    html: wrapEmail(content, "Your trial ends tomorrow. Here is what ZeroMissCall captured for " + plumber.businessName + "."),
+  };
+}
+
+// -------------------------------------------------
+// TEMPLATE C - MONTHLY REPORT
+// -------------------------------------------------
+function buildMonthlyReportEmail(plumber, stats, monthName) {
+  var totalConversations = stats.totalConversations;
+  var leadsCaptures = stats.leadsCaptures;
+  var emergencies = stats.emergencies;
+  var estimatedRevenue = stats.estimatedRevenue;
+  var topJobTypes = stats.topJobTypes;
+  var bestConvo = stats.bestConvo;
+  var captureRate = Math.round((leadsCaptures / Math.max(totalConversations, 1)) * 100);
+
+  var bestConvoHtml = '';
+  if (bestConvo && bestConvo.messages) {
+    bestConvoHtml =
+      '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:16px;">' +
+      '<tr><td style="background-color:#f8f9fa;border-radius:8px;padding:16px 20px;border-left:3px solid #3ecf8e;">' +
+      '<p style="font-family:Arial,sans-serif;font-size:11px;color:#888888;text-transform:uppercase;letter-spacing:0.5px;margin:0 0 10px 0;">Best conversation this month</p>' +
+      bestConvo.messages.slice(0, 6).map(function(m) {
+        return '<p style="font-family:Arial,sans-serif;font-size:13px;background-color:' +
+          (m.role === 'user' ? '#e9ecef' : '#E8791A') +
+          ';color:' + (m.role === 'user' ? '#333333' : '#ffffff') +
+          ';padding:8px 12px;border-radius:10px;display:inline-block;max-width:80%;margin:0 0 8px 0;line-height:1.4;">' +
+          (m.content.length > 120 ? m.content.substring(0, 120) + '...' : m.content) +
+          '</p><br/>';
+      }).join('') +
+      (bestConvo.leadCaptured ? '<p style="font-family:Arial,sans-serif;font-size:12px;color:#3ecf8e;margin:8px 0 0 0;">Lead captured - all 3 details collected</p>' : '') +
+      '</td></tr></table>';
+  }
+
+  var jobTypesHtml = '';
+  if (topJobTypes && topJobTypes.length > 0) {
+    jobTypesHtml =
+      '<p style="font-family:Arial,sans-serif;font-size:14px;font-weight:700;color:#0b1928;margin:0 0 10px 0;">Top job types this month</p>' +
+      topJobTypes.map(function(jt) {
+        return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-bottom:1px solid #eeeeee;">' +
+          '<tr>' +
+          '<td style="font-family:Arial,sans-serif;font-size:14px;color:#444444;padding:8px 0;text-transform:capitalize;">' + jt.type + '</td>' +
+          '<td style="font-family:Arial,sans-serif;font-size:14px;font-weight:700;color:#E8791A;text-align:right;padding:8px 0;">' + jt.count + ' ' + (jt.count === 1 ? 'enquiry' : 'enquiries') + '</td>' +
+          '</tr></table>';
+      }).join('');
+  }
+
+  var content =
+    '<div style="background-color:#0b1928;padding:36px 40px;text-align:center;" class="content-pad">' +
+    '<p style="font-family:Arial,sans-serif;font-size:12px;color:#6b84a0;text-transform:uppercase;letter-spacing:1px;margin:0 0 6px 0;">' + monthName + ' Report &mdash; ' + plumber.businessName + '</p>' +
+    '<p style="font-family:Arial,sans-serif;font-size:14px;color:#c8dce8;margin:0 0 4px 0;">Estimated revenue recovered</p>' +
+    '<div style="font-family:Arial,sans-serif;font-size:60px;font-weight:900;color:#3ecf8e;line-height:1;">$' + estimatedRevenue + '</div>' +
+    '<p style="font-family:Arial,sans-serif;font-size:13px;color:#6b84a0;margin:8px 0 0 0;">Based on ' + totalConversations + ' missed calls x $' + (plumber.averageJobValue || 250) + ' avg job value</p>' +
+    '</div>' +
+
+    '<div style="padding:28px 40px 20px;" class="content-pad">' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">' +
+    '<tr>' +
+    '<td class="stat-col" align="center" style="background-color:#f8f9fa;border-radius:10px;padding:16px 8px;border:1px solid #eeeeee;width:23%;">' +
+    '<div style="font-family:Arial,sans-serif;font-size:26px;font-weight:900;color:#E8791A;">' + totalConversations + '</div>' +
+    '<div style="font-family:Arial,sans-serif;font-size:11px;color:#888888;margin-top:4px;line-height:1.3;">Missed calls<br/>handled</div>' +
+    '</td><td width="2%"></td>' +
+    '<td class="stat-col" align="center" style="background-color:#f8f9fa;border-radius:10px;padding:16px 8px;border:1px solid #eeeeee;width:23%;">' +
+    '<div style="font-family:Arial,sans-serif;font-size:26px;font-weight:900;color:#3ecf8e;">' + leadsCaptures + '</div>' +
+    '<div style="font-family:Arial,sans-serif;font-size:11px;color:#888888;margin-top:4px;line-height:1.3;">Leads<br/>captured</div>' +
+    '</td><td width="2%"></td>' +
+    '<td class="stat-col" align="center" style="background-color:#f8f9fa;border-radius:10px;padding:16px 8px;border:1px solid #eeeeee;width:23%;">' +
+    '<div style="font-family:Arial,sans-serif;font-size:26px;font-weight:900;color:#0b1928;">' + captureRate + '%</div>' +
+    '<div style="font-family:Arial,sans-serif;font-size:11px;color:#888888;margin-top:4px;line-height:1.3;">Lead<br/>capture rate</div>' +
+    '</td><td width="2%"></td>' +
+    '<td class="stat-col" align="center" style="background-color:#f8f9fa;border-radius:10px;padding:16px 8px;border:1px solid ' + (emergencies > 0 ? '#fed7d7' : '#eeeeee') + ';width:23%;">' +
+    '<div style="font-family:Arial,sans-serif;font-size:26px;font-weight:900;color:' + (emergencies > 0 ? '#e53e3e' : '#0b1928') + ';">' + emergencies + '</div>' +
+    '<div style="font-family:Arial,sans-serif;font-size:11px;color:#888888;margin-top:4px;line-height:1.3;">Emergency<br/>alerts</div>' +
+    '</td>' +
+    '</tr></table>' +
+    '</div>' +
+
+    '<div style="padding:0 40px 20px;" class="content-pad">' +
+    bestConvoHtml +
+    jobTypesHtml +
+    '</div>' +
+
+    '<div style="height:1px;background-color:#eeeeee;margin:0 40px 20px;"></div>' +
+
+    '<div style="padding:0 40px 32px;" class="content-pad">' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">' +
+    '<tr><td style="font-family:Arial,sans-serif;font-size:14px;color:#444444;padding:6px 0;">Next billing date</td>' +
+    '<td style="font-family:Arial,sans-serif;font-size:14px;font-weight:700;color:#0b1928;text-align:right;padding:6px 0;">1st of next month</td></tr>' +
+    '<tr><td style="font-family:Arial,sans-serif;font-size:14px;color:#444444;padding:6px 0;">Monthly subscription</td>' +
+    '<td style="font-family:Arial,sans-serif;font-size:14px;font-weight:700;color:#0b1928;text-align:right;padding:6px 0;">$69.00</td></tr>' +
+    '</table>' +
+    '<p style="font-family:Arial,sans-serif;font-size:13px;color:#888888;margin:16px 0 0 0;line-height:1.6;">' +
+    'Questions about your account? Reply to this email or visit <a href="https://zeromisscall.com/contact.html" style="color:#E8791A;">zeromisscall.com/contact</a>' +
+    '</p>' +
+    '</div>';
+
+  return {
+    subject: plumber.businessName + " - Your " + monthName + " ZeroMissCall Report",
+    html: wrapEmail(content, plumber.businessName + " - your " + monthName + " ZeroMissCall report. Estimated $" + estimatedRevenue + " recovered."),
+  };
+}
+
+// -------------------------------------------------
+// SEND FUNCTIONS
+// -------------------------------------------------
+async function sendWeeklyDigest(plumber, stats) {
+  if (!plumber.email) return;
+  var _ref = buildWeeklyDigestEmail(plumber, stats);
   try {
-    const result = await resend.emails.send({
-      from:    SENDERS.reports,
-      to:      plumber.email,
-      subject,
-      html,
-    });
-    console.log(` Weekly digest sent to ${plumber.email} | ID: ${result.id}`);
+    var result = await resend.emails.send({ from: SENDERS.reports, to: plumber.email, subject: _ref.subject, html: _ref.html });
+    console.log("Weekly digest sent to " + plumber.email);
     return result;
   } catch (err) {
-    console.error(`ERR Failed to send weekly digest to ${plumber.email}:`, err.message);
+    console.error("Weekly digest failed for " + plumber.email + ": " + err.message);
     throw err;
   }
 }
 
 async function sendTrialEndEmail(plumber, stats, conversations) {
-  if (!plumber.email) {
-    console.warn(`!  No email for plumber ${plumber.businessName} - skipping trial end email`);
-    return;
-  }
-  const { subject, html } = buildTrialEndEmail(plumber, stats, conversations);
+  if (!plumber.email) return;
+  var _ref = buildTrialEndEmail(plumber, stats, conversations);
   try {
-    const result = await resend.emails.send({
-      from:    SENDERS.trial,
-      to:      plumber.email,
-      subject,
-      html,
-    });
-    console.log(` Trial end email sent to ${plumber.email} | ID: ${result.id}`);
+    var result = await resend.emails.send({ from: SENDERS.trial, to: plumber.email, subject: _ref.subject, html: _ref.html });
+    console.log("Trial end email sent to " + plumber.email);
     return result;
   } catch (err) {
-    console.error(`ERR Failed to send trial end email to ${plumber.email}:`, err.message);
+    console.error("Trial end email failed for " + plumber.email + ": " + err.message);
     throw err;
   }
 }
 
 async function sendMonthlyReport(plumber, stats, monthName) {
-  if (!plumber.email) {
-    console.warn(`!  No email for plumber ${plumber.businessName} - skipping monthly report`);
-    return;
-  }
-  const { subject, html } = buildMonthlyReportEmail(plumber, stats, monthName);
+  if (!plumber.email) return;
+  var _ref = buildMonthlyReportEmail(plumber, stats, monthName);
   try {
-    const result = await resend.emails.send({
-      from:    SENDERS.reports,
-      to:      plumber.email,
-      subject,
-      html,
-    });
-    console.log(` Monthly report sent to ${plumber.email} | ID: ${result.id}`);
+    var result = await resend.emails.send({ from: SENDERS.reports, to: plumber.email, subject: _ref.subject, html: _ref.html });
+    console.log("Monthly report sent to " + plumber.email);
     return result;
   } catch (err) {
-    console.error(`ERR Failed to send monthly report to ${plumber.email}:`, err.message);
+    console.error("Monthly report failed for " + plumber.email + ": " + err.message);
     throw err;
   }
 }
 
-// ─────────────────────────────────────────────
-// TEST SEND - fires all 3 emails to one address
-// Call via GET /test-emails?secret=YOUR_ADMIN_SECRET
-// ─────────────────────────────────────────────
 async function sendTestEmails(toEmail) {
-  const testPlumber = {
-    businessName:  "Dave's Plumbing Co.",
-    ownerName:     "Dave",
-    email:         toEmail,
-    ownerPhone:    "+15551234567",
+  var testPlumber = {
+    businessName: "Dave's Plumbing Co.",
+    ownerName: "Dave",
+    email: toEmail,
+    ownerPhone: "+15551234567",
     averageJobValue: 250,
+    dashboardToken: "test-token-123",
+    trialEndDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
   };
-
-  const testStats = {
+  var testStats = {
     totalConversations: 9,
-    leadsCaptures:      6,
-    emergencies:        1,
-    estimatedRevenue:   2250,
-    weekOf:             "May 26 - Jun 1, 2026",
-    topJobTypes: [
-      { type: "drain", count: 4 },
-      { type: "boiler", count: 3 },
-      { type: "leak",   count: 2 },
-    ],
+    leadsCaptures: 6,
+    emergencies: 1,
+    estimatedRevenue: 2250,
+    weekOf: "May 26 - Jun 1, 2026",
+    topJobTypes: [{ type: "drain", count: 4 }, { type: "boiler", count: 3 }, { type: "leak", count: 2 }],
     bestConvo: {
       leadCaptured: true,
       messages: [
         { role: "assistant", content: "Hey! Thanks for calling Dave's Plumbing - sorry we missed you. What do you need?" },
         { role: "user",      content: "Hi yeah my kitchen drain is completely blocked, water isn't going down at all" },
-        { role: "assistant", content: "That sounds frustrating! We can definitely sort that out. What's your zip code so I can confirm we cover your area?" },
+        { role: "assistant", content: "That sounds frustrating! We can definitely sort that out. What's your zip code?" },
         { role: "user",      content: "75201" },
-        { role: "assistant", content: "Perfect - we cover Dallas. When would you like someone to come out? Morning or afternoon works best?" },
-        { role: "user",      content: "Tomorrow morning would be great" },
       ],
     },
   };
 
-  const testConversations = [testStats.bestConvo];
-
-  console.log(` Sending test emails to ${toEmail}...`);
-
+  await sendWelcomeEmail(testPlumber);
   await sendWeeklyDigest(testPlumber, testStats);
-  await sendTrialEndEmail(testPlumber, testStats, testConversations);
+  await sendTrialEndEmail(testPlumber, testStats, [testStats.bestConvo]);
   await sendMonthlyReport(testPlumber, testStats, "May 2026");
-
-  console.log(`OK All 3 test emails sent to ${toEmail}`);
+  console.log("All 4 test emails sent to " + toEmail);
 }
 
 module.exports = {
@@ -703,54 +519,8 @@ module.exports = {
   sendTrialEndEmail,
   sendMonthlyReport,
   sendTestEmails,
+  buildWelcomeEmail,
   buildWeeklyDigestEmail,
   buildTrialEndEmail,
   buildMonthlyReportEmail,
 };
-
-// ─────────────────────────────────────────────────────────────
-// INTEGRATION INSTRUCTIONS
-// ─────────────────────────────────────────────────────────────
-//
-// STEP 1 - Install Resend:
-//   npm install resend
-//
-// STEP 2 - Add to .env and Railway environment variables:
-//   RESEND_API_KEY=re_xxxxxxxxxxxx
-//
-// STEP 3 - Add to .env.example:
-//   RESEND_API_KEY=your_resend_api_key
-//
-// STEP 4 - Add require at top of server.js:
-//   const emailService = require("./email");
-//
-// STEP 5 - Add test endpoint to server.js (before health check):
-//
-//   app.get("/test-emails", async (req, res) => {
-//     if (req.query.secret !== process.env.ADMIN_SECRET) {
-//       return res.status(401).json({ error: "Unauthorized" });
-//     }
-//     const toEmail = req.query.email || process.env.OWNER_EMAIL;
-//     try {
-//       await emailService.sendTestEmails(toEmail);
-//       res.json({ success: true, message: `3 test emails sent to ${toEmail}` });
-//     } catch (err) {
-//       res.status(500).json({ error: err.message });
-//     }
-//   });
-//
-// STEP 6 - Add ADMIN_SECRET to .env and Railway:
-//   ADMIN_SECRET=choose_a_strong_random_string
-//
-// STEP 7 - Add to Resend dashboard:
-//   - Go to resend.com/domains
-//   - Add zeromisscall.com
-//   - Add the DNS records to Hostinger
-//   - Verify the domain
-//   - Create reports@zeromisscall.com and ian@zeromisscall.com
-//     as sender identities
-//
-// STEP 8 - Test by visiting:
-//   https://your-railway-url.railway.app/test-emails?secret=YOUR_ADMIN_SECRET&email=your@email.com
-//
-// ─────────────────────────────────────────────────────────────
