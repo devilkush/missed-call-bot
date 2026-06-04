@@ -455,6 +455,133 @@ function buildMonthlyReportEmail(plumber, stats, monthName) {
   };
 }
 
+
+// -------------------------------------------------
+// TEMPLATE D - WELCOME EMAIL
+// Sends immediately on signup
+// -------------------------------------------------
+function buildWelcomeEmail(plumber, trialEnd) {
+  const previewText = "Your ZeroMissCall trial is active. Here is everything you need to get started.";
+
+  const content = `
+    <div style="padding:36px 36px 0;">
+      <p style="font-family:'Nunito',Arial,sans-serif;font-size:24px;font-weight:900;color:#0b1928;margin:0 0 8px 0;">
+        Welcome, ${plumber.ownerName}!
+      </p>
+      <p style="font-size:15px;color:#444;line-height:1.7;margin:0 0 24px 0;">
+        Your 14-day free trial for <strong>${plumber.businessName}</strong> is now active.
+        ZeroMissCall will automatically reply to every missed call starting right now.
+      </p>
+    </div>
+
+    <!-- What happens -->
+    <div style="padding:0 36px 24px;">
+      <div style="background:#f8f9fa;border-radius:10px;padding:20px;border-left:4px solid #E8791A;">
+        <p style="font-family:'Nunito',Arial,sans-serif;font-size:14px;font-weight:700;color:#0b1928;margin:0 0 12px 0;">
+          Here is what happens when someone calls and you miss it:
+        </p>
+        <p style="font-size:14px;color:#444;line-height:2;margin:0;">
+          1. &nbsp; They hear a friendly voice message<br/>
+          2. &nbsp; They get a text within 60 seconds<br/>
+          3. &nbsp; Our AI handles the conversation<br/>
+          4. &nbsp; You get an alert when a lead is captured<br/>
+          5. &nbsp; You call them back ready to close the job
+        </p>
+      </div>
+    </div>
+
+    <!-- Trial info -->
+    <div style="padding:0 36px 24px;">
+      <div style="background:#fff8f0;border-radius:10px;padding:20px;border-left:4px solid #E8791A;">
+        <p style="font-size:14px;color:#744210;margin:0;line-height:1.7;">
+          <strong>Your trial runs until ${trialEnd}.</strong>
+          After that it is just $69/month - cancel anytime, no contracts.
+          We will email you the day before your trial ends with a full summary.
+        </p>
+      </div>
+    </div>
+
+    <div style="height:1px;background:#eef0f3;margin:0 36px 24px;"></div>
+
+    <!-- Dashboard CTA -->
+    <div style="padding:0 36px 24px;">
+      <div style="background:#f8f9fa;border-radius:10px;padding:20px;border-left:4px solid #3ecf8e;">
+        <p style="font-family:'Nunito',Arial,sans-serif;font-size:14px;font-weight:700;color:#0b1928;margin:0 0 8px 0;">
+          Your personal dashboard
+        </p>
+        <p style="font-size:13px;color:#444;line-height:1.6;margin:0 0 14px 0;">
+          Bookmark this link. It is how you view your conversations, captured leads, and account settings.
+        </p>
+        <a href="https://missed-call-bot-production.up.railway.app/dashboard/${plumber.dashboardToken}"
+          style="display:inline-block;background:#0b1928;color:#fff;font-family:'Nunito',Arial,sans-serif;font-size:14px;font-weight:700;padding:12px 24px;border-radius:8px;text-decoration:none;">
+          View My Dashboard
+        </a>
+      </div>
+    </div>
+
+    <!-- Setup nudge -->
+    <div style="padding:0 36px 24px;">
+      <div style="background:#f0f7ff;border-radius:10px;padding:20px;border-left:4px solid #0b1928;">
+        <p style="font-family:'Nunito',Arial,sans-serif;font-size:14px;font-weight:700;color:#0b1928;margin:0 0 10px 0;">
+          Before you go live - takes 2 minutes
+        </p>
+        <p style="font-size:13px;color:#444;line-height:1.8;margin:0 0 14px 0;">
+          Log in to your dashboard and set:<br/>
+          <strong>Service area</strong> - what city or region do you cover?<br/>
+          <strong>Business hours</strong> - when are you available?<br/>
+          <strong>Average job value</strong> - used to calculate your revenue stats<br/>
+          <strong>Services</strong> - drain, boiler, leak detection etc.
+        </p>
+        <a href="https://missed-call-bot-production.up.railway.app/dashboard/${plumber.dashboardToken}"
+          style="display:inline-block;background:#E8791A;color:#fff;font-family:'Nunito',Arial,sans-serif;font-size:13px;font-weight:700;padding:10px 20px;border-radius:8px;text-decoration:none;">
+          Update My Settings
+        </a>
+      </div>
+    </div>
+
+    <!-- Visit site CTA -->
+    <div style="padding:0 36px 36px;text-align:center;">
+      <a href="https://zeromisscall.com"
+        style="display:inline-block;background:#E8791A;color:#fff;font-family:'Nunito',Arial,sans-serif;font-size:16px;font-weight:700;padding:14px 36px;border-radius:8px;text-decoration:none;">
+        Visit ZeroMissCall
+      </a>
+      <p style="font-size:14px;color:#6b84a0;line-height:1.6;margin:20px 0 0 0;">
+        Questions? Just reply to this email - Ian reads every one.<br/>
+        <strong style="color:#444;">Ian from ZeroMissCall</strong>
+      </p>
+    </div>
+  `;
+
+  return {
+    subject: "Welcome to ZeroMissCall - your trial is active, " + plumber.ownerName + "!",
+    html: wrapEmail(content, previewText),
+  };
+}
+
+async function sendWelcomeEmail(plumber) {
+  if (!plumber.email) return;
+  const trialEnd = plumber.trialEndDate
+    ? new Date(plumber.trialEndDate).toLocaleDateString("en-US", {
+        weekday: "long", year: "numeric", month: "long", day: "numeric",
+      })
+    : "in 14 days";
+
+  const { subject, html } = buildWelcomeEmail(plumber, trialEnd);
+  try {
+    const result = await resend.emails.send({
+      from:    SENDERS.trial,
+      to:      plumber.email,
+      subject,
+      html,
+    });
+    console.log("Welcome email sent to " + plumber.email + " | ID: " + result.id);
+    return result;
+  } catch (err) {
+    console.error("Welcome email FAILED for " + plumber.email + ": " + err.message);
+    throw err;
+  }
+}
+
 // ─────────────────────────────────────────────
 // SEND FUNCTIONS
 // ─────────────────────────────────────────────
@@ -571,6 +698,7 @@ async function sendTestEmails(toEmail) {
 }
 
 module.exports = {
+  sendWelcomeEmail,
   sendWeeklyDigest,
   sendTrialEndEmail,
   sendMonthlyReport,
