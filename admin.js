@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────
-// PHASE 6 - ADMIN & ONBOARDING API
+// PHASE 6  ADMIN & ONBOARDING API
 // ZeroMissCall v2
 //
 // HOW TO USE:
@@ -9,13 +9,13 @@
 // WHAT THIS DOES:
 // Protected API endpoints for managing plumber accounts:
 //
-//   POST /admin/plumbers        &rarr; create new plumber
-//   GET  /admin/plumbers        &rarr; list all plumbers
-//   GET  /admin/plumbers/:id    &rarr; get one plumber
-//   PUT  /admin/plumbers/:id    &rarr; update plumber config
-//   DELETE /admin/plumbers/:id  &rarr; deactivate plumber
+//   POST /admin/plumbers         create new plumber
+//   GET  /admin/plumbers         list all plumbers
+//   GET  /admin/plumbers/:id     get one plumber
+//   PUT  /admin/plumbers/:id     update plumber config
+//   DELETE /admin/plumbers/:id   deactivate plumber
 //
-//   POST /onboard               &rarr; self-serve signup (used by website form later)
+//   POST /onboard                self-serve signup (used by website form later)
 //
 // All /admin routes protected by ADMIN_SECRET header or query param
 // /onboard is public (used by signup form)
@@ -51,27 +51,19 @@ function validatePlumberData(data, requireAll = true) {
   const errors = [];
 
   if (requireAll) {
+    if (!data.twilioNumber)  errors.push("twilioNumber is required");
     if (!data.businessName)  errors.push("businessName is required");
     if (!data.ownerName)     errors.push("ownerName is required");
     if (!data.ownerPhone)    errors.push("ownerPhone is required");
     if (!data.email)         errors.push("email is required");
   }
 
-  if (data.email) {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(data.email)) {
-      errors.push("email must be a valid email address");
-    } else {
-      const domain = data.email.split("@")[1].toLowerCase();
-      const blockedDomains = [
-        "mailinator.com","guerrillamail.com","throwam.com","trashmail.com",
-        "maildrop.cc","yopmail.com","sharklasers.com","spam4.me",
-        "tempmail.com","temp-mail.org","dispostable.com","mailnull.com"
-      ];
-      if (blockedDomains.includes(domain)) {
-        errors.push("Please use a real business email address");
-      }
-    }
+  if (data.email && !data.email.includes("@")) {
+    errors.push("email must be a valid email address");
+  }
+
+  if (data.twilioNumber && !data.twilioNumber.startsWith("+")) {
+    errors.push("twilioNumber must be in E.164 format (e.g. +18885760762)");
   }
 
   if (data.ownerPhone && !data.ownerPhone.startsWith("+")) {
@@ -269,7 +261,7 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
 
   // ── DEACTIVATE PLUMBER ────────────────────────────────────
   // DELETE /admin/plumbers/:id
-  // Soft delete - sets active: false, doesn't remove data
+  // Soft delete  sets active: false, doesn't remove data
   app.delete("/admin/plumbers/:id", requireAdminAuth, async (req, res) => {
     try {
       const plumber = await db.collection("plumbers").findOne({
@@ -299,7 +291,7 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
 
   // ── SELF-SERVE ONBOARDING ─────────────────────────────────
   // POST /onboard
-  // Public endpoint - used by website signup form
+  // Public endpoint  used by website signup form
   // Creates plumber with trial status and sends welcome email
   app.post("/onboard", async (req, res) => {
     try {
@@ -323,12 +315,7 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
         });
       }
 
-      // Auto-assign the ZeroMissCall toll-free number as twilioNumber
-      const plumberData = {
-        ...req.body,
-        twilioNumber: process.env.TWILIO_NUMBER || "+18885760762",
-      };
-      const plumber = await db_helpers.createPlumber(db, plumberData);
+      const plumber = await db_helpers.createPlumber(db, req.body);
 
       // Send welcome email
       try {
@@ -402,136 +389,11 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
 // Sends when a new plumber signs up
 // ─────────────────────────────────────────────
 async function sendWelcomeEmail(plumber, emailService) {
-  // We'll use Resend directly here since we need
-  // a custom template not in the main email.js
-  const { Resend } = require("resend");
-  const resend = new Resend(process.env.RESEND_API_KEY);
-
-  const trialEnd = new Date(plumber.trialEndDate).toLocaleDateString("en-US", {
-    weekday: "long",
-    year:    "numeric",
-    month:   "long",
-    day:     "numeric",
-  });
-
-  const html = `<!DOCTYPE html>
-<html>
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
-<body style="background:#0b1928;margin:0;padding:0;font-family:'DM Sans',Arial,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#0b1928;">
-    <tr><td align="center" style="padding:32px 16px;">
-      <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;">
-
-        <!-- Header -->
-        <tr><td style="background:linear-gradient(135deg,#0b1928,#0f2035);border-radius:12px 12px 0 0;padding:28px 36px;text-align:center;border-bottom:3px solid #E8791A;">
-          <span style="font-family:'Nunito',Arial,sans-serif;font-size:28px;font-weight:900;color:#E8791A;letter-spacing:-0.5px;display:inline-block;">zero<span style="color:#ffffff;">miss</span>call</span>
-        </td></tr>
-
-        <!-- Content -->
-        <tr><td style="background:#ffffff;padding:36px;">
-          <h1 style="font-family:'Nunito',Arial,sans-serif;font-size:24px;color:#0b1928;margin:0 0 8px 0;">
-            Welcome to ZeroMissCall, ${plumber.ownerName}!
-          </h1>
-          <p style="font-size:15px;color:#444;line-height:1.7;margin:0 0 24px 0;">
-            Your 14-day free trial for <strong>${plumber.businessName}</strong> is now active.
-            ZeroMissCall will automatically reply to every missed call on
-            <strong>${plumber.twilioNumber}</strong> starting right now.
-          </p>
-
-          <!-- What happens box -->
-          <div style="background:#f8f9fa;border-radius:10px;padding:20px;margin:0 0 24px 0;border-left:4px solid #E8791A;">
-            <p style="font-family:'Nunito',Arial,sans-serif;font-size:14px;font-weight:700;color:#0b1928;margin:0 0 12px 0;">
-              Here's what happens when someone calls and you miss it:
-            </p>
-            <p style="font-size:14px;color:#444;line-height:1.8;margin:0;">
-              1. &nbsp;They hear a friendly voice message<br/>
-              2. &nbsp;They get a text within seconds<br/>
-              3. &nbsp;Our AI handles the conversation<br/>
-              4. &nbsp;You get an alert when a lead is captured<br/>
-              5. &nbsp;You call them back ready to close the job
-            </p>
-          </div>
-
-          <!-- Trial info -->
-          <div style="background:#fff8f0;border-radius:10px;padding:20px;margin:0 0 24px 0;border-left:4px solid #E8791A;">
-            <p style="font-size:14px;color:#744210;margin:0;">
-              <strong>Your trial runs until ${trialEnd}.</strong>
-              After that it's just $69/month - cancel anytime, no contracts.
-              We'll email you the day before your trial ends with a summary of everything we captured.
-            </p>
-          </div>
-
-          <!-- Dashboard CTA -->
-          <div style="background:#f8f9fa;border-radius:10px;padding:20px;margin:0 0 24px 0;border-left:4px solid #3ecf8e;">
-            <p style="font-family:'Nunito',Arial,sans-serif;font-size:14px;font-weight:700;color:#0b1928;margin:0 0 8px 0;">
-              Your personal dashboard
-            </p>
-            <p style="font-size:13px;color:#444;line-height:1.6;margin:0 0 14px 0;">
-              Bookmark this link - it's how you view your conversations, captured leads, and account settings.
-            </p>
-            <a href="https://missed-call-bot-production.up.railway.app/dashboard/${plumber.dashboardToken}"
-              style="display:inline-block;background:#0b1928;color:#fff;font-family:'Nunito',Arial,sans-serif;font-size:14px;font-weight:700;padding:12px 24px;border-radius:8px;text-decoration:none;word-break:break-all;">
-              View My Dashboard &rarr;
-            </a>
-          </div>
-
-          <!-- Setup nudge -->
-          <div style="background:#f0f7ff;border-radius:10px;padding:20px;margin:0 0 24px 0;border-left:4px solid #0b1928;">
-            <p style="font-family:'Nunito',Arial,sans-serif;font-size:14px;font-weight:700;color:#0b1928;margin:0 0 10px 0;">
-              Before you go live - takes 2 minutes
-            </p>
-            <p style="font-size:13px;color:#444;line-height:1.8;margin:0 0 14px 0;">
-              Your AI needs a few details to give accurate answers to your customers:
-            </p>
-            <p style="font-size:13px;color:#444;line-height:2;margin:0;">
-              <strong>Service area</strong> - what city/region do you cover?<br/>
-              <strong>Business hours</strong> - when are you available?<br/>
-              <strong>Average job value</strong> - used to calculate your revenue stats<br/>
-              <strong>Services</strong> - drain, boiler, leak detection etc.
-            </p>
-            <a href="https://missed-call-bot-production.up.railway.app/dashboard/${plumber.dashboardToken}"
-              style="display:inline-block;background:#E8791A;color:#fff;font-family:'Nunito',Arial,sans-serif;font-size:13px;font-weight:700;padding:10px 20px;border-radius:8px;text-decoration:none;margin-top:14px;">
-              Update My Settings &rarr;
-            </a>
-          </div>
-
-          <!-- CTA -->
-          <div style="text-align:center;margin:28px 0;">
-            <a href="https://zeromisscall.com" style="display:inline-block;background:#E8791A;color:#fff;font-family:'Nunito',Arial,sans-serif;font-size:16px;font-weight:700;padding:14px 36px;border-radius:8px;text-decoration:none;">
-              Visit ZeroMissCall &rarr;
-            </a>
-          </div>
-
-          <p style="font-size:14px;color:#6b84a0;line-height:1.6;margin:0;">
-            Questions? Just reply to this email - Ian reads every one.<br/>
-            <strong>Ian from ZeroMissCall</strong>
-          </p>
-        </td></tr>
-
-        <!-- Footer -->
-        <tr><td style="background:#0f2035;border-radius:0 0 12px 12px;padding:20px 36px;text-align:center;">
-          <p style="font-size:13px;color:#6b84a0;margin:0;">
-            ZeroMissCall &mdash; <a href="https://zeromisscall.com" style="color:#E8791A;">zeromisscall.com</a>
-          </p>
-        </td></tr>
-
-      </table>
-    </td></tr>
-  </table>
-</body>
-</html>`;
-
   try {
-    const result = await resend.emails.send({
-      from:    "Ian from ZeroMissCall <ian@zeromisscall.com>",
-      to:      plumber.email,
-      subject: `Welcome to ZeroMissCall - your trial is active, ${plumber.ownerName}!`,
-      html,
-    });
-    console.log(` Welcome email sent to ${plumber.email} | ID: ${result.id}`);
+    await emailService.sendWelcomeEmail(plumber);
+    console.log("Welcome email sent to " + plumber.email);
   } catch (err) {
-    console.error(` Welcome email FAILED for ${plumber.email}:`, err.message);
-    console.error(` Full error:`, JSON.stringify(err, null, 2));
+    console.error("Welcome email failed for " + plumber.email + ": " + err.message);
     throw err;
   }
 }
@@ -562,14 +424,14 @@ module.exports = { registerAdminRoutes };
 // INTEGRATION INSTRUCTIONS
 // ─────────────────────────────────────────────────────────────
 //
-// STEP 1 - Add require at top of server.js:
+// STEP 1  Add require at top of server.js:
 //   const { registerAdminRoutes } = require("./admin");
 //
-// STEP 2 - Register routes after MongoDB connects.
+// STEP 2  Register routes after MongoDB connects.
 // In your MongoDB .then() block, after initScheduler, add:
 //   registerAdminRoutes(app, db, db_helpers, emailService);
 //
-// STEP 3 - Test by creating your first plumber:
+// STEP 3  Test by creating your first plumber:
 //
 // Visit in browser or use a tool like Postman/Insomnia:
 //
@@ -589,10 +451,10 @@ module.exports = { registerAdminRoutes };
 //   "timezone": "America/Chicago"
 // }
 //
-// STEP 4 - View all your plumbers:
+// STEP 4  View all your plumbers:
 // GET /admin/plumbers?secret=zeromisscall123
 //
-// STEP 5 - View your business stats:
+// STEP 5  View your business stats:
 // GET /admin/stats?secret=zeromisscall123
 //
 // ─────────────────────────────────────────────────────────────
