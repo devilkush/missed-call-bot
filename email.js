@@ -231,17 +231,17 @@ function buildWeeklyDigestEmail(plumber, stats) {
     '<tr>' +
     '<td class="stat-col" align="center" style="background-color:#0b1928;border-radius:10px;padding:20px 12px;border:1px solid #1a3550;width:32%;">' +
     '<div style="font-family:Arial,sans-serif;font-size:34px;font-weight:900;color:#E8791A;line-height:1;">' + totalConversations + '</div>' +
-    '<div style="font-family:Arial,sans-serif;font-size:12px;color:#6b84a0;margin-top:6px;text-transform:uppercase;letter-spacing:0.5px;">Missed calls<br/>handled</div>' +
+    '<div style="font-family:Arial,sans-serif;font-size:11px;color:#6b84a0;margin-top:6px;">Calls handled</div>' +
     '</td>' +
-    '<td width="2%"></td>' +
+    '<td width="6" style="width:6px;"></td>' +
     '<td class="stat-col" align="center" style="background-color:#0b1928;border-radius:10px;padding:20px 12px;border:1px solid #1a3550;width:32%;">' +
     '<div style="font-family:Arial,sans-serif;font-size:34px;font-weight:900;color:#3ecf8e;line-height:1;">' + leadsCaptures + '</div>' +
-    '<div style="font-family:Arial,sans-serif;font-size:12px;color:#6b84a0;margin-top:6px;text-transform:uppercase;letter-spacing:0.5px;">Leads<br/>captured</div>' +
+    '<div style="font-family:Arial,sans-serif;font-size:11px;color:#6b84a0;margin-top:6px;">Leads captured</div>' +
     '</td>' +
-    '<td width="2%"></td>' +
+    '<td width="6" style="width:6px;"></td>' +
     '<td class="stat-col" align="center" style="background-color:#0b1928;border-radius:10px;padding:20px 12px;border:1px solid #1a3550;width:32%;">' +
     '<div style="font-family:Arial,sans-serif;font-size:34px;font-weight:900;color:#3ecf8e;line-height:1;">$' + estimatedRevenue + '</div>' +
-    '<div style="font-family:Arial,sans-serif;font-size:12px;color:#6b84a0;margin-top:6px;text-transform:uppercase;letter-spacing:0.5px;">Est. revenue<br/>recovered</div>' +
+    '<div style="font-family:Arial,sans-serif;font-size:11px;color:#6b84a0;margin-top:6px;">Est. revenue</div>' +
     '</td>' +
     '</tr>' +
     '</table>' +
@@ -394,19 +394,19 @@ function buildMonthlyReportEmail(plumber, stats, monthName) {
     '<tr>' +
     '<td class="stat-col" align="center" style="background-color:#f8f9fa;border-radius:10px;padding:16px 8px;border:1px solid #eeeeee;width:23%;">' +
     '<div style="font-family:Arial,sans-serif;font-size:26px;font-weight:900;color:#E8791A;">' + totalConversations + '</div>' +
-    '<div style="font-family:Arial,sans-serif;font-size:11px;color:#888888;margin-top:4px;line-height:1.3;">Missed calls<br/>handled</div>' +
-    '</td><td width="2%"></td>' +
+    '<div style="font-family:Arial,sans-serif;font-size:11px;color:#888888;margin-top:4px;">Calls</div>' +
+    '</td><td width="6" style="width:6px;"></td>' +
     '<td class="stat-col" align="center" style="background-color:#f8f9fa;border-radius:10px;padding:16px 8px;border:1px solid #eeeeee;width:23%;">' +
     '<div style="font-family:Arial,sans-serif;font-size:26px;font-weight:900;color:#3ecf8e;">' + leadsCaptures + '</div>' +
-    '<div style="font-family:Arial,sans-serif;font-size:11px;color:#888888;margin-top:4px;line-height:1.3;">Leads<br/>captured</div>' +
-    '</td><td width="2%"></td>' +
+    '<div style="font-family:Arial,sans-serif;font-size:11px;color:#888888;margin-top:4px;">Leads</div>' +
+    '</td><td width="6" style="width:6px;"></td>' +
     '<td class="stat-col" align="center" style="background-color:#f8f9fa;border-radius:10px;padding:16px 8px;border:1px solid #eeeeee;width:23%;">' +
     '<div style="font-family:Arial,sans-serif;font-size:26px;font-weight:900;color:#0b1928;">' + captureRate + '%</div>' +
-    '<div style="font-family:Arial,sans-serif;font-size:11px;color:#888888;margin-top:4px;line-height:1.3;">Lead<br/>capture rate</div>' +
-    '</td><td width="2%"></td>' +
+    '<div style="font-family:Arial,sans-serif;font-size:11px;color:#888888;margin-top:4px;">Lead rate</div>' +
+    '</td><td width="6" style="width:6px;"></td>' +
     '<td class="stat-col" align="center" style="background-color:#f8f9fa;border-radius:10px;padding:16px 8px;border:1px solid ' + (emergencies > 0 ? '#fed7d7' : '#eeeeee') + ';width:23%;">' +
     '<div style="font-family:Arial,sans-serif;font-size:26px;font-weight:900;color:' + (emergencies > 0 ? '#e53e3e' : '#0b1928') + ';">' + emergencies + '</div>' +
-    '<div style="font-family:Arial,sans-serif;font-size:11px;color:#888888;margin-top:4px;line-height:1.3;">Emergency<br/>alerts</div>' +
+    '<div style="font-family:Arial,sans-serif;font-size:11px;color:#888888;margin-top:4px;">Emergencies</div>' +
     '</td>' +
     '</tr></table>' +
     '</div>' +
