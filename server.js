@@ -474,5 +474,5 @@ process.on("unhandledRejection", (reason) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 ZeroMissCall v2.9.0 running on port ${PORT}`);
+  console.log(`🚀 ZeroMissCall v2.10.0 running on port ${PORT}`);
 });
