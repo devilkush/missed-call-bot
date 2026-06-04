@@ -384,13 +384,7 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
 // Sends when a new plumber signs up
 // ─────────────────────────────────────────────
 async function sendWelcomeEmail(plumber, emailService) {
-  try {
-    await emailService.sendWelcomeEmail(plumber);
-    console.log("Welcome email sent to " + plumber.email);
-  } catch (err) {
-    console.error("Welcome email failed for " + plumber.email + ": " + err.message);
-    throw err;
-  }
+  await emailService.sendWelcomeEmail(plumber);
 }
 
 // ─────────────────────────────────────────────
