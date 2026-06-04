@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────
-// PHASE 8 — BOOKING CONFIRMATION HANDOFF
+// PHASE 8 - BOOKING CONFIRMATION HANDOFF
 // ZeroMissCall v2
 //
 // HOW TO USE:
@@ -50,7 +50,7 @@ const TIME_PATTERNS = [
 ];
 
 // Keywords that indicate a job description was shared
-// (fairly broad — almost any substantive customer message qualifies)
+// (fairly broad - almost any substantive customer message qualifies)
 const JOB_PATTERNS = [
   /\bdrain\b/i, /\bleak\b/i, /\bpipe\b/i, /\bboiler\b/i,
   /\btoilet\b/i, /\bsink\b/i, /\bshower\b/i, /\bbath\b/i,
@@ -146,12 +146,12 @@ function analyseConversation(messages) {
 // ─────────────────────────────────────────────
 function buildLeadSMS(plumber, callerNumber, leadData) {
   return (
-    `📋 New lead — ZeroMissCall\n\n` +
+    ` New lead - ZeroMissCall\n\n` +
     `Customer: ${callerNumber}\n` +
     `Job: ${leadData.jobDescription}\n` +
     `Zip: ${leadData.callerZip}\n` +
     `Time: ${leadData.preferredTime}\n\n` +
-    `Call them back 👆`
+    `Call them back `
   );
 }
 
@@ -170,7 +170,7 @@ function buildLeadEmail(plumber, callerNumber, leadData, dashboardUrl) {
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>New Lead — ZeroMissCall</title>
+  <title>New Lead - ZeroMissCall</title>
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@700;800;900&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body style="background:#0b1928;margin:0;padding:0;font-family:'DM Sans',Arial,sans-serif;">
@@ -185,7 +185,7 @@ function buildLeadEmail(plumber, callerNumber, leadData, dashboardUrl) {
 
         <!-- Hero -->
         <tr><td style="background:linear-gradient(135deg,rgba(62,207,142,0.1),rgba(15,32,53,0.8));padding:32px 36px;text-align:center;border-bottom:1px solid rgba(62,207,142,0.2);">
-          <div style="font-size:48px;margin-bottom:8px;">📋</div>
+          <div style="font-size:48px;margin-bottom:8px;"></div>
           <div style="font-family:'Nunito',Arial,sans-serif;font-size:24px;font-weight:900;color:#ffffff;letter-spacing:-0.5px;margin-bottom:4px;">
             New Lead Captured
           </div>
@@ -196,7 +196,7 @@ function buildLeadEmail(plumber, callerNumber, leadData, dashboardUrl) {
         <tr><td style="background:#ffffff;padding:32px 36px;">
 
           <p style="font-family:'DM Sans',Arial,sans-serif;font-size:15px;color:#444;line-height:1.6;margin:0 0 24px 0;">
-            Hey ${plumber.ownerName} — a customer just confirmed their details. Here's everything you need to call them back:
+            Hey ${plumber.ownerName} - a customer just confirmed their details. Here's everything you need to call them back:
           </p>
 
           <!-- Detail cards -->
@@ -233,10 +233,10 @@ function buildLeadEmail(plumber, callerNumber, leadData, dashboardUrl) {
           <!-- CTAs -->
           <div style="text-align:center;margin:28px 0 8px;">
             <a href="tel:${callerNumber}" style="display:inline-block;background:#E8791A;color:#fff;font-family:'Nunito',Arial,sans-serif;font-size:16px;font-weight:800;padding:14px 36px;border-radius:8px;text-decoration:none;margin:0 6px 10px;">
-              📞 Call ${callerNumber}
+               Call ${callerNumber}
             </a>
             ${dashboardUrl ? `<a href="${dashboardUrl}" style="display:inline-block;background:#0b1928;color:#fff;font-family:'Nunito',Arial,sans-serif;font-size:14px;font-weight:700;padding:14px 28px;border-radius:8px;text-decoration:none;border:1px solid rgba(255,255,255,0.1);margin:0 6px 10px;">
-              View Full Conversation →
+              View Full Conversation &rarr;
             </a>` : ""}
           </div>
 
@@ -260,7 +260,7 @@ function buildLeadEmail(plumber, callerNumber, leadData, dashboardUrl) {
 </html>`;
 
   return {
-    subject: `📋 New lead — ${callerNumber} needs ${leadData.jobDescription.substring(0, 40)}`,
+    subject: `New lead - ${callerNumber} needs ${leadData.jobDescription.substring(0, 40)}`,
     html,
   };
 }
@@ -292,7 +292,7 @@ async function fireLeadHandoff(
     });
 
     if (existing) {
-      // Already fired — don't send duplicate
+      // Already fired - don't send duplicate
       return false;
     }
 
@@ -303,7 +303,7 @@ async function fireLeadHandoff(
       return false;
     }
 
-    console.log(`🎯 LEAD CAPTURED: ${callerNumber} → ${twilioNumber}`);
+    console.log(` LEAD CAPTURED: ${callerNumber} &rarr; ${twilioNumber}`);
     console.log(`   Job: ${leadData.jobDescription}`);
     console.log(`   Zip: ${leadData.callerZip}`);
     console.log(`   Time: ${leadData.preferredTime}`);
@@ -322,9 +322,9 @@ async function fireLeadHandoff(
       try {
         const sms = buildLeadSMS(plumber, callerNumber, leadData);
         await sendSMS(plumber.ownerPhone, twilioNumber, sms);
-        console.log(`✅ Lead SMS sent to plumber: ${plumber.ownerPhone}`);
+        console.log(` Lead SMS sent to plumber: ${plumber.ownerPhone}`);
       } catch (smsErr) {
-        console.error("❌ Lead SMS failed:", smsErr.message);
+        console.error(" Lead SMS failed:", smsErr.message);
       }
     }
 
@@ -347,16 +347,16 @@ async function fireLeadHandoff(
           html,
         });
 
-        console.log(`✅ Lead email sent to plumber: ${plumber.email}`);
+        console.log(` Lead email sent to plumber: ${plumber.email}`);
       } catch (emailErr) {
-        console.error("❌ Lead email failed:", emailErr.message);
+        console.error(" Lead email failed:", emailErr.message);
       }
     }
 
     return true;
 
   } catch (err) {
-    console.error("❌ Lead handoff error:", err.message);
+    console.error(" Lead handoff error:", err.message);
     return false;
   }
 }
@@ -384,16 +384,16 @@ module.exports = { fireLeadHandoff, analyseConversation };
 // INTEGRATION INSTRUCTIONS
 // ─────────────────────────────────────────────────────────────
 //
-// STEP 1 — Add require at top of server.js:
+// STEP 1 - Add require at top of server.js:
 //   const { fireLeadHandoff } = require("./handoff");
 //
-// STEP 2 — In /incoming-sms, after the AI replies successfully,
+// STEP 2 - In /incoming-sms, after the AI replies successfully,
 // add the lead handoff check.
 // Find this block:
 //
 //     await db_helpers.saveMessage(db, twilioNumber, callerNumber, "assistant", aiReply, { emergency });
 //     await sendSMS(callerNumber, twilioNumber, aiReply);
-//     console.log(`✅ AI replied to ${callerNumber}: "${aiReply}"`);
+//     console.log(` AI replied to ${callerNumber}: "${aiReply}"`);
 //
 // Add immediately after it:
 //
@@ -402,6 +402,6 @@ module.exports = { fireLeadHandoff, analyseConversation };
 //     await fireLeadHandoff(db, db_helpers, sendSMS, twilioNumber, callerNumber, updatedHistory, plumber);
 //
 // That's it. Every AI reply now triggers a check.
-// If the conversation has all 3 details — SMS + email fire once.
-// If not — nothing happens and it checks again next message.
+// If the conversation has all 3 details - SMS + email fire once.
+// If not - nothing happens and it checks again next message.
 // ─────────────────────────────────────────────────────────────
