@@ -84,7 +84,7 @@ function wrapEmail(contentHtml, previewText = "") {
           <!-- HEADER -->
           <tr>
             <td style="background:linear-gradient(135deg,#0b1928 0%,#0f2035 100%);border-radius:12px 12px 0 0;padding:28px 36px;text-align:center;border-bottom:3px solid #E8791A;">
-              <a href="${BRAND.siteUrl}" style="text-decoration:none;display:inline-block;"><span style="font-family:'Nunito',Arial,sans-serif;font-size:28px;font-weight:900;color:#ffffff;letter-spacing:-0.5px;">zero<span style="color:#E8791A;">miss</span>call</span></a>
+              <a href="${BRAND.siteUrl}" style="text-decoration:none;display:inline-block;"><span style="font-family:'Nunito',Arial,sans-serif;font-size:28px;font-weight:900;color:#E8791A;letter-spacing:-0.5px;">zero<span style="color:#ffffff;">miss</span>call</span></a>
             </td>
           </tr>
 
@@ -461,7 +461,7 @@ function buildMonthlyReportEmail(plumber, stats, monthName) {
 
 async function sendWeeklyDigest(plumber, stats) {
   if (!plumber.email) {
-    console.warn(`!️  No email for plumber ${plumber.businessName} - skipping weekly digest`);
+    console.warn(`!  No email for plumber ${plumber.businessName} - skipping weekly digest`);
     return;
   }
   const { subject, html } = buildWeeklyDigestEmail(plumber, stats);
@@ -472,17 +472,17 @@ async function sendWeeklyDigest(plumber, stats) {
       subject,
       html,
     });
-    console.log(`📧 Weekly digest sent to ${plumber.email} | ID: ${result.id}`);
+    console.log(` Weekly digest sent to ${plumber.email} | ID: ${result.id}`);
     return result;
   } catch (err) {
-    console.error(`❌ Failed to send weekly digest to ${plumber.email}:`, err.message);
+    console.error(`ERR Failed to send weekly digest to ${plumber.email}:`, err.message);
     throw err;
   }
 }
 
 async function sendTrialEndEmail(plumber, stats, conversations) {
   if (!plumber.email) {
-    console.warn(`!️  No email for plumber ${plumber.businessName} - skipping trial end email`);
+    console.warn(`!  No email for plumber ${plumber.businessName} - skipping trial end email`);
     return;
   }
   const { subject, html } = buildTrialEndEmail(plumber, stats, conversations);
@@ -493,17 +493,17 @@ async function sendTrialEndEmail(plumber, stats, conversations) {
       subject,
       html,
     });
-    console.log(`📧 Trial end email sent to ${plumber.email} | ID: ${result.id}`);
+    console.log(` Trial end email sent to ${plumber.email} | ID: ${result.id}`);
     return result;
   } catch (err) {
-    console.error(`❌ Failed to send trial end email to ${plumber.email}:`, err.message);
+    console.error(`ERR Failed to send trial end email to ${plumber.email}:`, err.message);
     throw err;
   }
 }
 
 async function sendMonthlyReport(plumber, stats, monthName) {
   if (!plumber.email) {
-    console.warn(`!️  No email for plumber ${plumber.businessName} - skipping monthly report`);
+    console.warn(`!  No email for plumber ${plumber.businessName} - skipping monthly report`);
     return;
   }
   const { subject, html } = buildMonthlyReportEmail(plumber, stats, monthName);
@@ -514,10 +514,10 @@ async function sendMonthlyReport(plumber, stats, monthName) {
       subject,
       html,
     });
-    console.log(`📧 Monthly report sent to ${plumber.email} | ID: ${result.id}`);
+    console.log(` Monthly report sent to ${plumber.email} | ID: ${result.id}`);
     return result;
   } catch (err) {
-    console.error(`❌ Failed to send monthly report to ${plumber.email}:`, err.message);
+    console.error(`ERR Failed to send monthly report to ${plumber.email}:`, err.message);
     throw err;
   }
 }
@@ -561,13 +561,13 @@ async function sendTestEmails(toEmail) {
 
   const testConversations = [testStats.bestConvo];
 
-  console.log(`📧 Sending test emails to ${toEmail}...`);
+  console.log(` Sending test emails to ${toEmail}...`);
 
   await sendWeeklyDigest(testPlumber, testStats);
   await sendTrialEndEmail(testPlumber, testStats, testConversations);
   await sendMonthlyReport(testPlumber, testStats, "May 2026");
 
-  console.log(`✅ All 3 test emails sent to ${toEmail}`);
+  console.log(`OK All 3 test emails sent to ${toEmail}`);
 }
 
 module.exports = {
