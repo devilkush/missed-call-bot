@@ -51,7 +51,6 @@ function validatePlumberData(data, requireAll = true) {
   const errors = [];
 
   if (requireAll) {
-    if (!data.twilioNumber)  errors.push("twilioNumber is required");
     if (!data.businessName)  errors.push("businessName is required");
     if (!data.ownerName)     errors.push("ownerName is required");
     if (!data.ownerPhone)    errors.push("ownerPhone is required");
@@ -60,10 +59,6 @@ function validatePlumberData(data, requireAll = true) {
 
   if (data.email && !data.email.includes("@")) {
     errors.push("email must be a valid email address");
-  }
-
-  if (data.twilioNumber && !data.twilioNumber.startsWith("+")) {
-    errors.push("twilioNumber must be in E.164 format (e.g. +18885760762)");
   }
 
   if (data.ownerPhone && !data.ownerPhone.startsWith("+")) {
