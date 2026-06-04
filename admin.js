@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────
-// PHASE 6 — ADMIN & ONBOARDING API
+// PHASE 6 - ADMIN & ONBOARDING API
 // ZeroMissCall v2
 //
 // HOW TO USE:
@@ -9,13 +9,13 @@
 // WHAT THIS DOES:
 // Protected API endpoints for managing plumber accounts:
 //
-//   POST /admin/plumbers        → create new plumber
-//   GET  /admin/plumbers        → list all plumbers
-//   GET  /admin/plumbers/:id    → get one plumber
-//   PUT  /admin/plumbers/:id    → update plumber config
-//   DELETE /admin/plumbers/:id  → deactivate plumber
+//   POST /admin/plumbers        &rarr; create new plumber
+//   GET  /admin/plumbers        &rarr; list all plumbers
+//   GET  /admin/plumbers/:id    &rarr; get one plumber
+//   PUT  /admin/plumbers/:id    &rarr; update plumber config
+//   DELETE /admin/plumbers/:id  &rarr; deactivate plumber
 //
-//   POST /onboard               → self-serve signup (used by website form later)
+//   POST /onboard               &rarr; self-serve signup (used by website form later)
 //
 // All /admin routes protected by ADMIN_SECRET header or query param
 // /onboard is public (used by signup form)
@@ -58,8 +58,21 @@ function validatePlumberData(data, requireAll = true) {
     if (!data.email)         errors.push("email is required");
   }
 
-  if (data.email && !data.email.includes("@")) {
-    errors.push("email must be a valid email address");
+  if (data.email) {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(data.email)) {
+      errors.push("email must be a valid email address");
+    } else {
+      const domain = data.email.split("@")[1].toLowerCase();
+      const blockedDomains = [
+        "mailinator.com","guerrillamail.com","throwam.com","trashmail.com",
+        "maildrop.cc","yopmail.com","sharklasers.com","spam4.me",
+        "tempmail.com","temp-mail.org","dispostable.com","mailnull.com"
+      ];
+      if (blockedDomains.includes(domain)) {
+        errors.push("Please use a real business email address");
+      }
+    }
   }
 
   if (data.twilioNumber && !data.twilioNumber.startsWith("+")) {
@@ -128,11 +141,11 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
           welcomeEmailSent: true,
         });
       } catch (emailErr) {
-        console.error("⚠️ Welcome email failed:", emailErr.message);
+        console.error(" Welcome email failed:", emailErr.message);
         // Don't fail the whole request if email fails
       }
 
-      console.log(`✅ Plumber created: ${plumber.businessName} (${plumber.twilioNumber})`);
+      console.log(` Plumber created: ${plumber.businessName} (${plumber.twilioNumber})`);
 
       res.status(201).json({
         success: true,
@@ -140,7 +153,7 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
         plumber: sanitizePlumber(plumber),
       });
     } catch (err) {
-      console.error("❌ Create plumber error:", err.message);
+      console.error(" Create plumber error:", err.message);
       res.status(500).json({ error: err.message });
     }
   });
@@ -166,7 +179,7 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
         plumbers: plumbers.map(sanitizePlumber),
       });
     } catch (err) {
-      console.error("❌ List plumbers error:", err.message);
+      console.error(" List plumbers error:", err.message);
       res.status(500).json({ error: err.message });
     }
   });
@@ -201,7 +214,7 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
         stats,
       });
     } catch (err) {
-      console.error("❌ Get plumber error:", err.message);
+      console.error(" Get plumber error:", err.message);
       res.status(500).json({ error: err.message });
     }
   });
@@ -246,7 +259,7 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
 
       await db_helpers.updatePlumber(db, plumber.twilioNumber, updates);
 
-      console.log(`✅ Plumber updated: ${plumber.businessName}`);
+      console.log(` Plumber updated: ${plumber.businessName}`);
 
       res.json({
         success: true,
@@ -254,14 +267,14 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
         updated: updates,
       });
     } catch (err) {
-      console.error("❌ Update plumber error:", err.message);
+      console.error(" Update plumber error:", err.message);
       res.status(500).json({ error: err.message });
     }
   });
 
   // ── DEACTIVATE PLUMBER ────────────────────────────────────
   // DELETE /admin/plumbers/:id
-  // Soft delete — sets active: false, doesn't remove data
+  // Soft delete - sets active: false, doesn't remove data
   app.delete("/admin/plumbers/:id", requireAdminAuth, async (req, res) => {
     try {
       const plumber = await db.collection("plumbers").findOne({
@@ -277,21 +290,21 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
         subscriptionStatus: "cancelled",
       });
 
-      console.log(`🔴 Plumber deactivated: ${plumber.businessName}`);
+      console.log(` Plumber deactivated: ${plumber.businessName}`);
 
       res.json({
         success: true,
         message: `${plumber.businessName} deactivated. Bot will no longer respond for ${plumber.twilioNumber}.`,
       });
     } catch (err) {
-      console.error("❌ Deactivate plumber error:", err.message);
+      console.error(" Deactivate plumber error:", err.message);
       res.status(500).json({ error: err.message });
     }
   });
 
   // ── SELF-SERVE ONBOARDING ─────────────────────────────────
   // POST /onboard
-  // Public endpoint — used by website signup form
+  // Public endpoint - used by website signup form
   // Creates plumber with trial status and sends welcome email
   app.post("/onboard", async (req, res) => {
     try {
@@ -315,7 +328,12 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
         });
       }
 
-      const plumber = await db_helpers.createPlumber(db, req.body);
+      // Auto-assign the ZeroMissCall toll-free number as twilioNumber
+      const plumberData = {
+        ...req.body,
+        twilioNumber: process.env.TWILIO_NUMBER || "+18885760762",
+      };
+      const plumber = await db_helpers.createPlumber(db, plumberData);
 
       // Send welcome email
       try {
@@ -324,10 +342,10 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
           welcomeEmailSent: true,
         });
       } catch (emailErr) {
-        console.error("⚠️ Welcome email failed:", emailErr.message);
+        console.error(" Welcome email failed:", emailErr.message);
       }
 
-      console.log(`🎉 New trial signup: ${plumber.businessName} (${plumber.email})`);
+      console.log(` New trial signup: ${plumber.businessName} (${plumber.email})`);
 
       res.status(201).json({
         success: true,
@@ -336,7 +354,7 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
         dashboardUrl: `https://missed-call-bot-production.up.railway.app/dashboard/${plumber.dashboardToken}`,
       });
     } catch (err) {
-      console.error("❌ Onboard error:", err.message);
+      console.error(" Onboard error:", err.message);
       res.status(500).json({ error: err.message });
     }
   });
@@ -378,7 +396,7 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
         },
       });
     } catch (err) {
-      console.error("❌ Stats error:", err.message);
+      console.error(" Stats error:", err.message);
       res.status(500).json({ error: err.message });
     }
   });
@@ -443,7 +461,7 @@ async function sendWelcomeEmail(plumber, emailService) {
           <div style="background:#fff8f0;border-radius:10px;padding:20px;margin:0 0 24px 0;border-left:4px solid #E8791A;">
             <p style="font-size:14px;color:#744210;margin:0;">
               <strong>Your trial runs until ${trialEnd}.</strong>
-              After that it's just $69/month — cancel anytime, no contracts.
+              After that it's just $69/month - cancel anytime, no contracts.
               We'll email you the day before your trial ends with a summary of everything we captured.
             </p>
           </div>
@@ -454,11 +472,11 @@ async function sendWelcomeEmail(plumber, emailService) {
               Your personal dashboard
             </p>
             <p style="font-size:13px;color:#444;line-height:1.6;margin:0 0 14px 0;">
-              Bookmark this link — it's how you view your conversations, captured leads, and account settings.
+              Bookmark this link - it's how you view your conversations, captured leads, and account settings.
             </p>
             <a href="https://missed-call-bot-production.up.railway.app/dashboard/${plumber.dashboardToken}"
               style="display:inline-block;background:#0b1928;color:#fff;font-family:'Nunito',Arial,sans-serif;font-size:14px;font-weight:700;padding:12px 24px;border-radius:8px;text-decoration:none;word-break:break-all;">
-              View My Dashboard →
+              View My Dashboard &rarr;
             </a>
           </div>
 
@@ -471,26 +489,26 @@ async function sendWelcomeEmail(plumber, emailService) {
               Your AI needs a few details to give accurate answers to your customers:
             </p>
             <p style="font-size:13px;color:#444;line-height:2;margin:0;">
-              <strong>Service area</strong> — what city/region do you cover?<br/>
-              <strong>Business hours</strong> — when are you available?<br/>
-              <strong>Average job value</strong> — used to calculate your revenue stats<br/>
-              <strong>Services</strong> — drain, boiler, leak detection etc.
+              <strong>Service area</strong> - what city/region do you cover?<br/>
+              <strong>Business hours</strong> - when are you available?<br/>
+              <strong>Average job value</strong> - used to calculate your revenue stats<br/>
+              <strong>Services</strong> - drain, boiler, leak detection etc.
             </p>
             <a href="https://missed-call-bot-production.up.railway.app/dashboard/${plumber.dashboardToken}"
               style="display:inline-block;background:#E8791A;color:#fff;font-family:'Nunito',Arial,sans-serif;font-size:13px;font-weight:700;padding:10px 20px;border-radius:8px;text-decoration:none;margin-top:14px;">
-              Update My Settings →
+              Update My Settings &rarr;
             </a>
           </div>
 
           <!-- CTA -->
           <div style="text-align:center;margin:28px 0;">
             <a href="https://zeromisscall.com" style="display:inline-block;background:#E8791A;color:#fff;font-family:'Nunito',Arial,sans-serif;font-size:16px;font-weight:700;padding:14px 36px;border-radius:8px;text-decoration:none;">
-              Visit ZeroMissCall →
+              Visit ZeroMissCall &rarr;
             </a>
           </div>
 
           <p style="font-size:14px;color:#6b84a0;line-height:1.6;margin:0;">
-            Questions? Just reply to this email — Ian reads every one.<br/>
+            Questions? Just reply to this email - Ian reads every one.<br/>
             <strong>Ian from ZeroMissCall</strong>
           </p>
         </td></tr>
@@ -515,10 +533,10 @@ async function sendWelcomeEmail(plumber, emailService) {
       subject: `Welcome to ZeroMissCall - your trial is active, ${plumber.ownerName}!`,
       html,
     });
-    console.log(`📧 Welcome email sent to ${plumber.email} | ID: ${result.id}`);
+    console.log(` Welcome email sent to ${plumber.email} | ID: ${result.id}`);
   } catch (err) {
-    console.error(`❌ Welcome email FAILED for ${plumber.email}:`, err.message);
-    console.error(`❌ Full error:`, JSON.stringify(err, null, 2));
+    console.error(` Welcome email FAILED for ${plumber.email}:`, err.message);
+    console.error(` Full error:`, JSON.stringify(err, null, 2));
     throw err;
   }
 }
@@ -549,14 +567,14 @@ module.exports = { registerAdminRoutes };
 // INTEGRATION INSTRUCTIONS
 // ─────────────────────────────────────────────────────────────
 //
-// STEP 1 — Add require at top of server.js:
+// STEP 1 - Add require at top of server.js:
 //   const { registerAdminRoutes } = require("./admin");
 //
-// STEP 2 — Register routes after MongoDB connects.
+// STEP 2 - Register routes after MongoDB connects.
 // In your MongoDB .then() block, after initScheduler, add:
 //   registerAdminRoutes(app, db, db_helpers, emailService);
 //
-// STEP 3 — Test by creating your first plumber:
+// STEP 3 - Test by creating your first plumber:
 //
 // Visit in browser or use a tool like Postman/Insomnia:
 //
@@ -576,10 +594,10 @@ module.exports = { registerAdminRoutes };
 //   "timezone": "America/Chicago"
 // }
 //
-// STEP 4 — View all your plumbers:
+// STEP 4 - View all your plumbers:
 // GET /admin/plumbers?secret=zeromisscall123
 //
-// STEP 5 — View your business stats:
+// STEP 5 - View your business stats:
 // GET /admin/stats?secret=zeromisscall123
 //
 // ─────────────────────────────────────────────────────────────
