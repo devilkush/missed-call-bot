@@ -424,7 +424,7 @@ async function sendWelcomeEmail(plumber, emailService) {
 
         <!-- Header -->
         <tr><td style="background:linear-gradient(135deg,#0b1928,#0f2035);border-radius:12px 12px 0 0;padding:28px 36px;text-align:center;border-bottom:3px solid #E8791A;">
-          <span style="font-family:'Nunito',Arial,sans-serif;font-size:28px;font-weight:900;color:#ffffff;letter-spacing:-0.5px;display:inline-block;">zero<span style="color:#E8791A;">miss</span>call</span>
+          <span style="font-family:'Nunito',Arial,sans-serif;font-size:28px;font-weight:900;color:#E8791A;letter-spacing:-0.5px;display:inline-block;">zero<span style="color:#ffffff;">miss</span>call</span>
         </td></tr>
 
         <!-- Content -->
