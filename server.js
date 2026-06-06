@@ -9,7 +9,7 @@ const ratelimit = require("./ratelimit");
 const emailService = require("./email");
 const emailService2 = require("./email2");
 const { initScheduler } = require("./scheduler");
-const { registerAdminRoutes } = require("./admin");
+const { registerAdminRoutes, sendDailySummaryEmail, notifyOwnerError } = require("./admin");
 const { registerDashboardRoute } = require("./dashboard");
 const { fireLeadHandoff } = require("./handoff");
 const { registerBillingRoutes } = require("./billing");
@@ -483,15 +483,22 @@ app.get("/", (_req, res) => {
 // GLOBAL ERROR HANDLERS
 // ─────────────────────────────────────────────
 app.use((err, _req, res, _next) => {
-  console.error("❌ Unhandled route error:", err);
+  console.error("Unhandled route error:", err);
+  notifyOwnerError("unhandled route", err).catch(function(){});
   res.status(500).send("Internal server error");
 });
 
-process.on("unhandledRejection", (reason) => {
-  console.error("❌ Unhandled promise rejection:", reason);
+process.on("unhandledRejection", function(reason) {
+  console.error("Unhandled promise rejection:", reason);
+  notifyOwnerError("unhandledRejection", { message: String(reason) }).catch(function(){});
+});
+
+process.on("uncaughtException", function(err) {
+  console.error("Uncaught exception:", err);
+  notifyOwnerError("uncaughtException", err).catch(function(){});
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 ZeroMissCall v2.9.0 running on port ${PORT}`);
+  console.log(` ZeroMissCall v2.11.0 running on port ${PORT}`);
 });
