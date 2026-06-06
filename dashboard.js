@@ -58,6 +58,14 @@ function buildDashboardHtml(plumber, stats, conversations) {
           <div style="padding-top:14px;">
             ${messages}
           </div>
+          <div style="margin-top:12px;border-top:1px solid rgba(255,255,255,0.07);padding-top:12px;">
+            <div style="font-size:11px;color:#6b84a0;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px;">Reply as ${plumber.businessName}</div>
+            <div style="display:flex;gap:8px;align-items:flex-end;">
+              <textarea id="reply-text-${index}" rows="2" placeholder="Type your reply..." style="flex:1;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:10px 12px;color:#fff;font-family:'DM Sans',sans-serif;font-size:13px;resize:none;outline:none;line-height:1.5;"></textarea>
+              <button onclick="sendReply(${index}, '${convo.callerNumber}')" id="reply-btn-${index}" style="background:#E8791A;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-family:'Nunito',sans-serif;font-size:13px;font-weight:800;cursor:pointer;white-space:nowrap;flex-shrink:0;">Send</button>
+            </div>
+            <div id="reply-status-${index}" style="font-size:12px;margin-top:6px;display:none;"></div>
+          </div>
         </div>
       </div>
     `;
@@ -385,6 +393,48 @@ function buildDashboardHtml(plumber, stats, conversations) {
       });
     }
 
+
+    function sendReply(index, callerNumber) {
+      var text = document.getElementById('reply-text-' + index).value.trim();
+      var btn  = document.getElementById('reply-btn-' + index);
+      var status = document.getElementById('reply-status-' + index);
+
+      if (!text) return;
+      if (text.length > 320) {
+        status.textContent = 'Message too long (max 320 characters)';
+        status.style.color = '#f05252';
+        status.style.display = 'block';
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Sending...';
+      status.style.display = 'none';
+
+      fetch(window.location.pathname + '/reply', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ callerNumber: callerNumber, message: text })
+      })
+      .then(function(r) {
+        if (!r.ok) throw new Error('Failed');
+        document.getElementById('reply-text-' + index).value = '';
+        status.textContent = 'Reply sent successfully';
+        status.style.color = '#3ecf8e';
+        status.style.display = 'block';
+        btn.textContent = 'Send';
+        btn.disabled = false;
+        setTimeout(function() { status.style.display = 'none'; }, 3000);
+      })
+      .catch(function() {
+        status.textContent = 'Failed to send. Try again.';
+        status.style.color = '#f05252';
+        status.style.display = 'block';
+        btn.textContent = 'Send';
+        btn.disabled = false;
+      });
+    }
+
   </script>
 
 </body>
@@ -414,6 +464,43 @@ function registerDashboardRoute(app, db, db_helpers) {
     }
   });
 
+
+
+  // ── Manual reply from dashboard ───────────────────────────────────────────
+  app.post("/dashboard/:token/reply", async (req, res) => {
+    try {
+      var plumber = await db_helpers.getPlumberByToken(db, req.params.token);
+      if (!plumber) return res.status(404).json({ error: "Not found" });
+
+      var callerNumber = req.body.callerNumber;
+      var message      = (req.body.message || "").trim();
+
+      if (!callerNumber || !message) {
+        return res.status(400).json({ error: "Missing callerNumber or message" });
+      }
+      if (message.length > 320) {
+        return res.status(400).json({ error: "Message too long (max 320 chars)" });
+      }
+
+      // Send SMS via Twilio
+      var twilio = require("twilio");
+      var client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+      await client.messages.create({
+        to:   callerNumber,
+        from: plumber.twilioNumber,
+        body: message,
+      });
+
+      // Save to conversation history
+      await db_helpers.saveMessage(db, plumber.twilioNumber, callerNumber, "assistant", message, { manualReply: true });
+
+      console.log("Manual reply sent from " + plumber.businessName + " to " + callerNumber);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("Reply error:", err.message);
+      res.status(500).json({ error: "Failed to send reply: " + err.message });
+    }
+  });
 
   app.get("/dashboard/:token", async (req, res) => {
     try {
