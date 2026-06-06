@@ -7,6 +7,7 @@ const db_helpers = require("./db");
 const optout = require("./optout");
 const ratelimit = require("./ratelimit");
 const emailService = require("./email");
+const emailService2 = require("./email2");
 const { initScheduler } = require("./scheduler");
 const { registerAdminRoutes } = require("./admin");
 const { registerDashboardRoute } = require("./dashboard");
@@ -16,7 +17,7 @@ const { registerBillingRoutes } = require("./billing");
 const app = express();
 
 // ─────────────────────────────────────────────
-// CORS — allow requests from zeromisscall.com
+// CORS - allow requests from zeromisscall.com
 // ─────────────────────────────────────────────
 app.use((req, res, next) => {
   const allowed = [
@@ -33,7 +34,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// ── Stripe webhook needs raw body — register BEFORE express.json()
+// ── Stripe webhook needs raw body - register BEFORE express.json()
 app.use("/billing/webhook", express.raw({ type: "application/json" }));
 
 app.use(express.urlencoded({ extended: false }));
@@ -132,23 +133,23 @@ BUSINESS DETAILS:
 - Owner: ${plumber.ownerName}
 - Service area: ${plumber.serviceArea}
 - Hours: ${plumber.hours}
-- Emergency 24/7: ${plumber.emergencyAvailable ? "Yes" : "No — for genuine emergencies refer to 911 or a 24hr service"}${servicesBlock}
+- Emergency 24/7: ${plumber.emergencyAvailable ? "Yes" : "No - for genuine emergencies refer to 911 or a 24hr service"}${servicesBlock}
 
 PLUMBING KNOWLEDGE (use naturally when relevant):
 - Common jobs: drain unblocking, boiler servicing/repair, water heater replacement (tank & tankless), bathroom/kitchen installs, leak detection and repair, pipe repair/replacement, radiator issues, outside tap installs, water pressure problems, toilet/cistern repairs, stopcock and valve issues.
-- For active leaks: advise customer to locate and shut off the main stop valve — usually under the kitchen sink or near the water meter.
+- For active leaks: advise customer to locate and shut off the main stop valve - usually under the kitchen sink or near the water meter.
 - Pricing: NEVER quote specific prices. Always say the owner will provide a clear, no-obligation quote before any work starts. No surprises.
 - Licensing: if asked, confirm the business is fully licensed and insured in their state (unless a customFaq says otherwise).
 
 TONE AND STYLE:
-1. Warm, human, and concise. This is SMS — aim for 2-3 sentences per message unless more is genuinely needed.
+1. Warm, human, and concise. This is SMS - aim for 2-3 sentences per message unless more is genuinely needed.
 2. Never start two consecutive replies the same way.
 3. If asked whether you're a bot: be honest. Say you're an AI assistant for ${plumber.businessName} and that ${plumber.ownerName} will follow up personally.
 4. Never mention competitors or compare prices.
 5. No robotic sign-offs like "Best regards" or "Sincerely".
 6. If the job sounds complex or needs a site visit, say ${plumber.ownerName} will call them back shortly.
-7. Once you have all three pieces of info (what they need, zip code, preferred time) — confirm you have it and tell them ${plumber.ownerName} will be in touch to confirm. Don't keep asking unnecessary questions after that.
-8. You are texting on behalf of ${plumber.businessName} — stay in character at all times.${faqBlock}`;
+7. Once you have all three pieces of info (what they need, zip code, preferred time) - confirm you have it and tell them ${plumber.ownerName} will be in touch to confirm. Don't keep asking unnecessary questions after that.
+8. You are texting on behalf of ${plumber.businessName} - stay in character at all times.${faqBlock}`;
 }
 
 // ─────────────────────────────────────────────
@@ -194,12 +195,12 @@ app.post("/missed-call", async (req, res) => {
 
   const missedStatuses = ["no-answer", "busy", "failed", "canceled"];
   if (!missedStatuses.includes(callStatus)) {
-    return res.status(200).send("Call was answered — no action needed.");
+    return res.status(200).send("Call was answered - no action needed.");
   }
 
   if (callSid && isDuplicate(callSid)) {
-    console.log(`⏭️  Duplicate callback for ${callSid} — skipping.`);
-    return res.status(200).send("Duplicate — skipped.");
+    console.log(`⏭️  Duplicate callback for ${callSid} - skipping.`);
+    return res.status(200).send("Duplicate - skipped.");
   }
 
   const plumber = await db_helpers.getPlumberByTwilioNumber(db, twilioNumber);
@@ -209,7 +210,7 @@ app.post("/missed-call", async (req, res) => {
   }
 
   const openingMessage =
-    `Hey! Thanks for calling ${plumber.businessName} — sorry we missed you, ` +
+    `Hey! Thanks for calling ${plumber.businessName} - sorry we missed you, ` +
     `we're probably out on a job. I can help you right now over text. What do you need?`;
 
   try {
@@ -217,8 +218,8 @@ app.post("/missed-call", async (req, res) => {
       db_helpers, db, twilioNumber, callerNumber
     );
     if (blocked) {
-      console.log(`🚫 Skipping opening text — ${callerNumber} has opted out.`);
-      return res.status(200).send("Opted out — no message sent.");
+      console.log(`🚫 Skipping opening text - ${callerNumber} has opted out.`);
+      return res.status(200).send("Opted out - no message sent.");
     }
 
     await sendSMS(callerNumber, twilioNumber, openingMessage);
@@ -228,7 +229,7 @@ app.post("/missed-call", async (req, res) => {
       await sendSMS(
         plumber.ownerPhone,
         twilioNumber,
-        `📞 Missed call from ${callerNumber}. Auto-reply sent — conversation started.`
+        `📞 Missed call from ${callerNumber}. Auto-reply sent - conversation started.`
       );
     }
 
@@ -249,7 +250,7 @@ app.post("/incoming-sms", async (req, res) => {
   const incomingText = req.body.Body?.trim();
 
   if (!incomingText) {
-    return res.status(200).send("Empty message — ignored.");
+    return res.status(200).send("Empty message - ignored.");
   }
 
   console.log(`💬 SMS | ${callerNumber} → ${twilioNumber}: "${incomingText}"`);
@@ -291,7 +292,7 @@ app.post("/incoming-sms", async (req, res) => {
       await sendSMS(
         plumber.ownerPhone,
         twilioNumber,
-        `🚨 EMERGENCY — ${callerNumber} needs urgent help: "${incomingText}". Call them back NOW.`
+        `🚨 EMERGENCY - ${callerNumber} needs urgent help: "${incomingText}". Call them back NOW.`
       );
     } catch (alertErr) {
       console.error("❌ Failed to send emergency alert:", alertErr.message);
@@ -379,7 +380,7 @@ app.get("/test-emails", async (req, res) => {
 
 
 // ─────────────────────────────────────────────
-// CONTACT FORM — website enquiries
+// CONTACT FORM - website enquiries
 // POST /contact
 // ─────────────────────────────────────────────
 app.post("/contact", async (req, res) => {
@@ -404,8 +405,8 @@ app.post("/contact", async (req, res) => {
         <table style="width:100%;border-collapse:collapse;">
           <tr><td style="padding:8px 0;color:#999;font-size:13px;width:120px;">Name</td><td style="padding:8px 0;font-size:14px;">${name}</td></tr>
           <tr><td style="padding:8px 0;color:#999;font-size:13px;">Email</td><td style="padding:8px 0;font-size:14px;"><a href="mailto:${email}" style="color:#E8791A;">${email}</a></td></tr>
-          <tr><td style="padding:8px 0;color:#999;font-size:13px;">Business</td><td style="padding:8px 0;font-size:14px;">${business || "—"}</td></tr>
-          <tr><td style="padding:8px 0;color:#999;font-size:13px;">Topic</td><td style="padding:8px 0;font-size:14px;">${topic || "—"}</td></tr>
+          <tr><td style="padding:8px 0;color:#999;font-size:13px;">Business</td><td style="padding:8px 0;font-size:14px;">${business || "-"}</td></tr>
+          <tr><td style="padding:8px 0;color:#999;font-size:13px;">Topic</td><td style="padding:8px 0;font-size:14px;">${topic || "-"}</td></tr>
         </table>
         <div style="margin-top:20px;background:#f5f5f5;border-radius:8px;padding:16px;">
           <p style="margin:0;font-size:14px;color:#333;white-space:pre-wrap;">${message}</p>
@@ -418,7 +419,7 @@ app.post("/contact", async (req, res) => {
       from:    "ZeroMissCall <reports@zeromisscall.com>",
       to:      process.env.OWNER_EMAIL || "hello@zeromisscall.com",
       replyTo: email,
-      subject: `[Contact] ${topic || "New enquiry"} — ${name}`,
+      subject: `[Contact] ${topic || "New enquiry"} - ${name}`,
       html:    notifyHtml,
     });
 
@@ -428,23 +429,41 @@ app.post("/contact", async (req, res) => {
         <h2 style="color:#E8791A;">Thanks, ${firstName}!</h2>
         <p style="color:#96aec6;line-height:1.7;">We've received your message and will get back to you within 2 hours on business days.</p>
         <p style="color:#96aec6;line-height:1.7;">In the meantime, feel free to explore how ZeroMissCall works at <a href="https://zeromisscall.com" style="color:#E8791A;">zeromisscall.com</a>.</p>
-        <p style="color:#96aec6;margin-top:24px;font-size:14px;">— The ZeroMissCall Team</p>
+        <p style="color:#96aec6;margin-top:24px;font-size:14px;">- The ZeroMissCall Team</p>
       </div>
     `;
 
     await resendClient.emails.send({
       from:    "Ian from ZeroMissCall <ian@zeromisscall.com>",
       to:      email,
-      subject: "We got your message — ZeroMissCall",
+      subject: "We got your message - ZeroMissCall",
       html:    autoReplyHtml,
     });
 
-    console.log(`📧 Contact form from ${name} <${email}> — topic: ${topic || "n/a"}`);
+    console.log(`📧 Contact form from ${name} <${email}> - topic: ${topic || "n/a"}`);
     res.json({ ok: true });
 
   } catch (err) {
     console.error("❌ Contact form error:", err.message);
     res.status(500).json({ error: "Failed to send. Please email hello@zeromisscall.com directly." });
+  }
+});
+
+
+// ─────────────────────────────────────────────
+// TEST EMAIL2 - fires all 4 new emails
+// GET /test-emails2?secret=YOUR_ADMIN_SECRET&email=you@email.com
+// ─────────────────────────────────────────────
+app.get("/test-emails2", async (req, res) => {
+  if (req.query.secret !== process.env.ADMIN_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const toEmail = req.query.email || process.env.OWNER_EMAIL;
+  try {
+    await emailService2.sendTestEmails2(toEmail);
+    res.json({ success: true, message: "4 test emails sent to " + toEmail });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -474,5 +493,5 @@ process.on("unhandledRejection", (reason) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 ZeroMissCall v2.10.0 running on port ${PORT}`);
+  console.log(`🚀 ZeroMissCall v2.9.0 running on port ${PORT}`);
 });
