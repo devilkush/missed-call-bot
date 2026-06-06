@@ -424,6 +424,16 @@ function initScheduler(app, db, db_helpers, emailService) {
     }
   }, { timezone: "UTC" });
 
+
+  // ─── DAILY SUMMARY TO IAN - 8:00 AM UTC ───────────────────────────────────
+  cron.schedule("0 8 * * *", async () => {
+    try {
+      await sendDailySummaryEmail(db, db_helpers, emailService);
+    } catch (err) {
+      console.error("Daily summary error:", err.message);
+    }
+  }, { timezone: "UTC" });
+
 module.exports = { initScheduler };
 
 // ─────────────────────────────────────────────────────────────
