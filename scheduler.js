@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────
-// PHASE 5 — SCHEDULED JOBS
+// PHASE 5 - SCHEDULED JOBS
 // ZeroMissCall v2
 //
 // HOW TO USE:
@@ -10,30 +10,30 @@
 // WHAT THIS DOES:
 // Four automated jobs that run on a schedule:
 //
-//   Job 1 — Daily trial check (6am UTC)
+//   Job 1 - Daily trial check (6am UTC)
 //   Finds plumbers on day 13 of trial, sends trial-end email
 //
-//   Job 2 — Weekly digest (Monday 7am UTC)
+//   Job 2 - Weekly digest (Monday 7am UTC)
 //   Sends weekly summary to all active plumbers
 //
-//   Job 3 — Monthly report (last day of month, 5am UTC)
+//   Job 3 - Monthly report (last day of month, 5am UTC)
 //   Sends full monthly report to all active plumbers
 //
-//   Job 4 — Trial expiry enforcement (midnight UTC)
+//   Job 4 - Trial expiry enforcement (midnight UTC)
 //   Deactivates expired trials, stops bot responding
 // ─────────────────────────────────────────────────────────────
 
 const cron = require("node-cron");
 
 // ─────────────────────────────────────────────
-// HELPER — get month name
+// HELPER - get month name
 // ─────────────────────────────────────────────
 function getMonthName(date) {
   return date.toLocaleString("en-US", { month: "long", year: "numeric" });
 }
 
 // ─────────────────────────────────────────────
-// HELPER — get week date range string
+// HELPER - get week date range string
 // ─────────────────────────────────────────────
 function getWeekOf() {
   const now = new Date();
@@ -47,7 +47,7 @@ function getWeekOf() {
 }
 
 // ─────────────────────────────────────────────
-// HELPER — is today the last day of the month?
+// HELPER - is today the last day of the month?
 // ─────────────────────────────────────────────
 function isLastDayOfMonth() {
   const now = new Date();
@@ -57,7 +57,7 @@ function isLastDayOfMonth() {
 }
 
 // ─────────────────────────────────────────────
-// HELPER — get date range for last 7 days
+// HELPER - get date range for last 7 days
 // ─────────────────────────────────────────────
 function getLastWeekRange() {
   const now = new Date();
@@ -68,7 +68,7 @@ function getLastWeekRange() {
 }
 
 // ─────────────────────────────────────────────
-// HELPER — get date range for current month
+// HELPER - get date range for current month
 // ─────────────────────────────────────────────
 function getCurrentMonthRange() {
   const now = new Date();
@@ -78,7 +78,7 @@ function getCurrentMonthRange() {
 }
 
 // ─────────────────────────────────────────────
-// JOB 1 — DAILY TRIAL CHECK
+// JOB 1 - DAILY TRIAL CHECK
 // Runs every day at 6:00 AM UTC
 // Finds plumbers on day 13 of trial
 // Sends trial-end email with real conversation data
@@ -94,7 +94,7 @@ async function runTrialEndCheck(db, db_helpers, emailService) {
       return;
     }
 
-    console.log(`⏰ [CRON] ${plumbers.length} trial(s) ending tomorrow — sending emails...`);
+    console.log(`⏰ [CRON] ${plumbers.length} trial(s) ending tomorrow - sending emails...`);
 
     for (const plumber of plumbers) {
       try {
@@ -141,7 +141,7 @@ async function runTrialEndCheck(db, db_helpers, emailService) {
 }
 
 // ─────────────────────────────────────────────
-// JOB 2 — WEEKLY DIGEST
+// JOB 2 - WEEKLY DIGEST
 // Runs every Monday at 7:00 AM UTC
 // Sends weekly summary to all active plumbers
 // ─────────────────────────────────────────────
@@ -191,7 +191,7 @@ async function runWeeklyDigest(db, db_helpers, emailService) {
 }
 
 // ─────────────────────────────────────────────
-// JOB 3 — MONTHLY REPORT
+// JOB 3 - MONTHLY REPORT
 // Runs every day at 5:00 AM UTC
 // Only actually sends on the last day of the month
 // ─────────────────────────────────────────────
@@ -243,7 +243,7 @@ async function runMonthlyReport(db, db_helpers, emailService) {
 }
 
 // ─────────────────────────────────────────────
-// JOB 4 — TRIAL EXPIRY ENFORCEMENT
+// JOB 4 - TRIAL EXPIRY ENFORCEMENT
 // Runs every day at midnight UTC
 // Deactivates expired trials
 // Stops the bot responding for expired numbers
@@ -259,7 +259,7 @@ async function runTrialExpiryEnforcement(db, db_helpers) {
       return;
     }
 
-    console.log(`⏰ [CRON] ${expired.length} trial(s) expired — deactivating...`);
+    console.log(`⏰ [CRON] ${expired.length} trial(s) expired - deactivating...`);
 
     for (const plumber of expired) {
       try {
@@ -340,29 +340,29 @@ function createManualTriggers(app, db, db_helpers, emailService) {
 }
 
 // ─────────────────────────────────────────────
-// MAIN — INITIALISE ALL SCHEDULED JOBS
+// MAIN - INITIALISE ALL SCHEDULED JOBS
 // Call this once after MongoDB connects
 // ─────────────────────────────────────────────
 function initScheduler(app, db, db_helpers, emailService) {
   console.log("⏰ Initialising scheduled jobs...");
 
-  // Job 1 — Daily trial check at 6:00 AM UTC
+  // Job 1 - Daily trial check at 6:00 AM UTC
   cron.schedule("0 6 * * *", () => {
     runTrialEndCheck(db, db_helpers, emailService);
   }, { timezone: "UTC" });
 
-  // Job 2 — Weekly digest every Monday at 7:00 AM UTC
+  // Job 2 - Weekly digest every Monday at 7:00 AM UTC
   cron.schedule("0 7 * * 1", () => {
     runWeeklyDigest(db, db_helpers, emailService);
   }, { timezone: "UTC" });
 
-  // Job 3 — Monthly report check at 5:00 AM UTC every day
+  // Job 3 - Monthly report check at 5:00 AM UTC every day
   // (only actually sends on last day of month)
   cron.schedule("0 5 * * *", () => {
     runMonthlyReport(db, db_helpers, emailService);
   }, { timezone: "UTC" });
 
-  // Job 4 — Trial expiry enforcement at midnight UTC
+  // Job 4 - Trial expiry enforcement at midnight UTC
   cron.schedule("0 0 * * *", () => {
     runTrialExpiryEnforcement(db, db_helpers);
   }, { timezone: "UTC" });
@@ -371,14 +371,14 @@ function initScheduler(app, db, db_helpers, emailService) {
   createManualTriggers(app, db, db_helpers, emailService);
 
   console.log("✅ Scheduled jobs initialised:");
-  console.log("   📧 Trial end check    — daily at 6:00 AM UTC");
-  console.log("   📧 Weekly digest      — Mondays at 7:00 AM UTC");
-  console.log("   📧 Monthly report     — last day of month at 5:00 AM UTC");
-  console.log("   🔒 Trial expiry       — daily at midnight UTC");
+  console.log("   📧 Trial end check    - daily at 6:00 AM UTC");
+  console.log("   📧 Weekly digest      - Mondays at 7:00 AM UTC");
+  console.log("   📧 Monthly report     - last day of month at 5:00 AM UTC");
+  console.log("   🔒 Trial expiry       - daily at midnight UTC");
 }
 
 
-  // ─── DAY 3 CHECK-IN — 9:00 AM UTC daily ───────────────────────────────────
+  // ─── DAY 3 CHECK-IN - 9:00 AM UTC daily ───────────────────────────────────
   cron.schedule("0 9 * * *", async () => {
     try {
       var plumbers = await db_helpers.getAllActivePlumbers(db);
@@ -400,20 +400,44 @@ function initScheduler(app, db, db_helpers, emailService) {
     }
   }, { timezone: "UTC" });
 
+
+  // ─── FORWARDING DETECTION - 10:00 AM UTC daily ────────────────────────────
+  // If a plumber has been signed up 48+ hours and has zero calls, nudge them
+  cron.schedule("0 10 * * *", async () => {
+    try {
+      var plumbers = await db_helpers.getAllActivePlumbers(db);
+      var now = new Date();
+      for (var i = 0; i < plumbers.length; i++) {
+        var plumber = plumbers[i];
+        if (plumber.subscriptionStatus === "expired") continue;
+        var hoursSince = Math.floor((now - new Date(plumber.createdAt)) / (1000 * 60 * 60));
+        if (hoursSince < 48 || plumber.forwardingNudgeSent) continue;
+        var stats = await db_helpers.getStats(db, plumber.twilioNumber, new Date(plumber.createdAt), now);
+        if ((stats.totalConversations || 0) === 0) {
+          await emailService2.sendDay3Checkin(plumber);
+          await db_helpers.updatePlumber(db, plumber.twilioNumber, { forwardingNudgeSent: true });
+          console.log("Forwarding nudge sent to " + plumber.businessName);
+        }
+      }
+    } catch (err) {
+      console.error("Forwarding detection error:", err.message);
+    }
+  }, { timezone: "UTC" });
+
 module.exports = { initScheduler };
 
 // ─────────────────────────────────────────────────────────────
 // INTEGRATION INSTRUCTIONS
 // ─────────────────────────────────────────────────────────────
 //
-// STEP 1 — Install node-cron:
+// STEP 1 - Install node-cron:
 // Add "node-cron": "^3.0.3" to package.json dependencies
-// (same way you added resend — edit on GitHub)
+// (same way you added resend - edit on GitHub)
 //
-// STEP 2 — Add require at top of server.js:
+// STEP 2 - Add require at top of server.js:
 //   const { initScheduler } = require("./scheduler");
 //
-// STEP 3 — Initialise scheduler after MongoDB connects.
+// STEP 3 - Initialise scheduler after MongoDB connects.
 // Replace your existing MongoDB connection block with this:
 //
 //   MongoClient.connect(process.env.MONGODB_URI)
@@ -426,7 +450,7 @@ module.exports = { initScheduler };
 //     })
 //     .catch((err) => console.error("❌ MongoDB error:", err));
 //
-// STEP 4 — Test manually without waiting for cron:
+// STEP 4 - Test manually without waiting for cron:
 //
 //   Trial end check:
 //   https://YOUR-RAILWAY-URL/admin/trigger/trial-check?secret=YOUR_ADMIN_SECRET
