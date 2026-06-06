@@ -387,6 +387,24 @@ async function getPlumberByToken(db, token) {
   return db.collection("plumbers").findOne({ dashboardToken: token, active: true });
 }
 
+
+// ── Get all plumbers (for admin dashboard) ──
+async function getAllPlumbers(db) {
+  if (!db) return [];
+  return db.collection("plumbers")
+    .find({})
+    .sort({ createdAt: -1 })
+    .toArray();
+}
+
+// ── Get all active plumbers (for scheduler) ──
+async function getAllActivePlumbers(db) {
+  if (!db) return [];
+  return db.collection("plumbers")
+    .find({ active: true })
+    .toArray();
+}
+
 // ── Get recent conversations for dashboard ──
 async function getRecentConversations(db, twilioNumber, limit = 20) {
   if (!db) return [];
@@ -434,6 +452,8 @@ module.exports = {
   getActiveForWeeklyDigest,
   getActiveForMonthlyReport,
   getExpiredTrials,
+  getAllPlumbers,
+  getAllActivePlumbers,
   getPlumberByToken,
   getRecentConversations,
   ensureIndexes,
