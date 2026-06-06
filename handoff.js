@@ -20,6 +20,7 @@
 // ─────────────────────────────────────────────────────────────
 
 const { Resend } = require("resend");
+const emailService2 = require("./email2");
 
 // ─────────────────────────────────────────────
 // LEAD DETECTION
@@ -351,6 +352,24 @@ async function fireLeadHandoff(
       } catch (emailErr) {
         console.error(" Lead email failed:", emailErr.message);
       }
+    }
+
+    // Fire first lead email if this is their first ever captured lead
+    try {
+      var allConvos = await db.collection("conversations").find({
+        twilioNumber: twilioNumber,
+        leadCaptured: true,
+      }).toArray();
+      if (allConvos.length === 1) {
+        await emailService2.sendFirstLeadEmail(plumber, {
+          callerNumber:   callerNumber,
+          jobDescription: leadData.jobDescription || "",
+          callerZip:      leadData.callerZip || "",
+        });
+        console.log(" First lead email sent to " + plumber.email);
+      }
+    } catch (firstLeadErr) {
+      console.error(" First lead email error:", firstLeadErr.message);
     }
 
     return true;
