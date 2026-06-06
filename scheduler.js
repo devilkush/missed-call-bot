@@ -377,6 +377,29 @@ function initScheduler(app, db, db_helpers, emailService) {
   console.log("   🔒 Trial expiry       — daily at midnight UTC");
 }
 
+
+  // ─── DAY 3 CHECK-IN — 9:00 AM UTC daily ───────────────────────────────────
+  cron.schedule("0 9 * * *", async () => {
+    try {
+      var plumbers = await db_helpers.getAllActivePlumbers(db);
+      var now = new Date();
+      for (var i = 0; i < plumbers.length; i++) {
+        var plumber = plumbers[i];
+        var daysSince = Math.floor((now - new Date(plumber.createdAt)) / (1000 * 60 * 60 * 24));
+        if (daysSince === 3 && !plumber.day3CheckinSent) {
+          var stats = await db_helpers.getStats(db, plumber.twilioNumber, new Date(plumber.createdAt), now);
+          if ((stats.totalConversations || 0) === 0) {
+            await emailService2.sendDay3Checkin(plumber);
+            await db_helpers.updatePlumber(db, plumber.twilioNumber, { day3CheckinSent: true });
+            console.log("Day 3 checkin sent to " + plumber.businessName);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Day 3 checkin error:", err.message);
+    }
+  }, { timezone: "UTC" });
+
 module.exports = { initScheduler };
 
 // ─────────────────────────────────────────────────────────────
