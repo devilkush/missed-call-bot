@@ -24,6 +24,8 @@
 // ─────────────────────────────────────────────────────────────
 
 const cron = require("node-cron");
+const { sendDailySummaryEmail } = require("./admin");
+const emailService2 = require("./email2");
 
 // ─────────────────────────────────────────────
 // HELPER - get month name
@@ -98,7 +100,6 @@ async function runTrialEndCheck(db, db_helpers, emailService) {
 
     for (const plumber of plumbers) {
       try {
-        // Get their stats for the full trial period
         const stats = await db_helpers.getStats(
           db,
           plumber.twilioNumber,
@@ -106,7 +107,6 @@ async function runTrialEndCheck(db, db_helpers, emailService) {
           new Date()
         );
 
-        // Calculate estimated revenue
         const avgJobValue = plumber.averageJobValue || 250;
         const estimatedRevenue = (stats.leadsCaptures * avgJobValue).toLocaleString();
 
@@ -115,17 +115,14 @@ async function runTrialEndCheck(db, db_helpers, emailService) {
           estimatedRevenue,
         };
 
-        // Get real conversations for snippets
         const conversations = await db_helpers.getRecentConversations(
           db,
           plumber.twilioNumber,
           5
         );
 
-        // Send trial end email
         await emailService.sendTrialEndEmail(plumber, enrichedStats, conversations);
 
-        // Mark trial end email as sent so it doesn't fire again
         await db_helpers.updatePlumber(db, plumber.twilioNumber, {
           trialEndEmailSent: true,
         });
@@ -175,7 +172,6 @@ async function runWeeklyDigest(db, db_helpers, emailService) {
 
         await emailService.sendWeeklyDigest(plumber, enrichedStats);
 
-        // Update last sent timestamp
         await db_helpers.updatePlumber(db, plumber.twilioNumber, {
           weeklyDigestLastSent: new Date(),
         });
@@ -227,7 +223,6 @@ async function runMonthlyReport(db, db_helpers, emailService) {
 
         await emailService.sendMonthlyReport(plumber, enrichedStats, monthName);
 
-        // Update last sent timestamp
         await db_helpers.updatePlumber(db, plumber.twilioNumber, {
           monthlyReportLastSent: new Date(),
         });
@@ -285,7 +280,6 @@ async function runTrialExpiryEnforcement(db, db_helpers) {
 // ─────────────────────────────────────────────
 function createManualTriggers(app, db, db_helpers, emailService) {
 
-  // Manually trigger trial end check
   app.get("/admin/trigger/trial-check", async (req, res) => {
     if (req.query.secret !== process.env.ADMIN_SECRET) {
       return res.status(401).json({ error: "Unauthorized" });
@@ -298,7 +292,6 @@ function createManualTriggers(app, db, db_helpers, emailService) {
     }
   });
 
-  // Manually trigger weekly digest
   app.get("/admin/trigger/weekly-digest", async (req, res) => {
     if (req.query.secret !== process.env.ADMIN_SECRET) {
       return res.status(401).json({ error: "Unauthorized" });
@@ -311,13 +304,11 @@ function createManualTriggers(app, db, db_helpers, emailService) {
     }
   });
 
-  // Manually trigger monthly report
   app.get("/admin/trigger/monthly-report", async (req, res) => {
     if (req.query.secret !== process.env.ADMIN_SECRET) {
       return res.status(401).json({ error: "Unauthorized" });
     }
     try {
-      // Override last-day check for manual trigger
       await runMonthlyReport(db, db_helpers, emailService);
       res.json({ success: true, message: "Monthly report completed" });
     } catch (err) {
@@ -325,7 +316,6 @@ function createManualTriggers(app, db, db_helpers, emailService) {
     }
   });
 
-  // Manually trigger trial expiry
   app.get("/admin/trigger/trial-expiry", async (req, res) => {
     if (req.query.secret !== process.env.ADMIN_SECRET) {
       return res.status(401).json({ error: "Unauthorized" });
@@ -357,7 +347,6 @@ function initScheduler(app, db, db_helpers, emailService) {
   }, { timezone: "UTC" });
 
   // Job 3 - Monthly report check at 5:00 AM UTC every day
-  // (only actually sends on last day of month)
   cron.schedule("0 5 * * *", () => {
     runMonthlyReport(db, db_helpers, emailService);
   }, { timezone: "UTC" });
@@ -375,10 +364,8 @@ function initScheduler(app, db, db_helpers, emailService) {
   console.log("   📧 Weekly digest      - Mondays at 7:00 AM UTC");
   console.log("   📧 Monthly report     - last day of month at 5:00 AM UTC");
   console.log("   🔒 Trial expiry       - daily at midnight UTC");
-}
 
-
-  // ─── DAY 3 CHECK-IN - 9:00 AM UTC daily ───────────────────────────────────
+  // ─── DAY 3 CHECK-IN - 9:00 AM UTC daily ──────────────────
   cron.schedule("0 9 * * *", async () => {
     try {
       var plumbers = await db_helpers.getAllActivePlumbers(db);
@@ -400,9 +387,7 @@ function initScheduler(app, db, db_helpers, emailService) {
     }
   }, { timezone: "UTC" });
 
-
-  // ─── FORWARDING DETECTION - 10:00 AM UTC daily ────────────────────────────
-  // If a plumber has been signed up 48+ hours and has zero calls, nudge them
+  // ─── FORWARDING DETECTION - 10:00 AM UTC daily ───────────
   cron.schedule("0 10 * * *", async () => {
     try {
       var plumbers = await db_helpers.getAllActivePlumbers(db);
@@ -424,8 +409,7 @@ function initScheduler(app, db, db_helpers, emailService) {
     }
   }, { timezone: "UTC" });
 
-
-  // ─── DAILY SUMMARY TO IAN - 8:00 AM UTC ───────────────────────────────────
+  // ─── DAILY SUMMARY TO IAN - 8:00 AM UTC ──────────────────
   cron.schedule("0 8 * * *", async () => {
     try {
       await sendDailySummaryEmail(db, db_helpers, emailService);
@@ -434,41 +418,6 @@ function initScheduler(app, db, db_helpers, emailService) {
     }
   }, { timezone: "UTC" });
 
-module.exports = { initScheduler };
+}
 
-// ─────────────────────────────────────────────────────────────
-// INTEGRATION INSTRUCTIONS
-// ─────────────────────────────────────────────────────────────
-//
-// STEP 1 - Install node-cron:
-// Add "node-cron": "^3.0.3" to package.json dependencies
-// (same way you added resend - edit on GitHub)
-//
-// STEP 2 - Add require at top of server.js:
-//   const { initScheduler } = require("./scheduler");
-//
-// STEP 3 - Initialise scheduler after MongoDB connects.
-// Replace your existing MongoDB connection block with this:
-//
-//   MongoClient.connect(process.env.MONGODB_URI)
-//     .then((client) => {
-//       db = client.db("zeromisscall");
-//       db_helpers.ensureIndexes(db);
-//       initScheduler(app, db, db_helpers, emailService);
-//       console.log("✅ MongoDB connected");
-//       console.log("✅ MongoDB indexes ensured");
-//     })
-//     .catch((err) => console.error("❌ MongoDB error:", err));
-//
-// STEP 4 - Test manually without waiting for cron:
-//
-//   Trial end check:
-//   https://YOUR-RAILWAY-URL/admin/trigger/trial-check?secret=YOUR_ADMIN_SECRET
-//
-//   Weekly digest:
-//   https://YOUR-RAILWAY-URL/admin/trigger/weekly-digest?secret=YOUR_ADMIN_SECRET
-//
-//   Monthly report:
-//   https://YOUR-RAILWAY-URL/admin/trigger/monthly-report?secret=YOUR_ADMIN_SECRET
-//
-// ─────────────────────────────────────────────────────────────
+module.exports = { initScheduler };
