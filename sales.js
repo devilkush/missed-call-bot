@@ -1,18 +1,25 @@
 // ─────────────────────────────────────────────────────────────
-// SALES DASHBOARD — STEP 1
+// SALES DASHBOARD — STEP 2
 // ZeroMissCall outbound sales machine
 //
 // HOW TO USE:
-// 1. Save this file as sales.js in the same folder as server.js
-// 2. Follow integration instructions at the bottom
+// 1. Save this file as sales.js (replaces the Step 1 version)
+// 2. server.js integration is unchanged from Step 1:
+//      const { registerSalesRoutes } = require("./sales");
+//      registerSalesRoutes(app, db);
 //
-// WHAT THIS DOES (Step 1):
-//   GET  /admin/sales                 → sales dashboard HTML page
-//   POST /admin/sales/leads           → add a lead manually
-//   PUT  /admin/sales/leads/:id       → edit a lead (email, name, notes, do-not-call)
+// WHAT THIS DOES (Step 1 + Step 2):
+//   GET  /admin/sales                  → sales dashboard HTML page
+//   POST /admin/sales/leads            → add a lead manually
+//   PUT  /admin/sales/leads/:id        → edit a lead (email, name, notes,
+//                                        do-not-call, callback scheduling)
+//   POST /admin/sales/leads/:id/log    → one-tap call logging
+//                                        (no_answer / voicemail / spoke /
+//                                         not_interested / interested)
+//                                        interested = auto-sends the
+//                                        invitation email via email2.js
 //
 // Coming in later steps:
-//   Step 2 → call logging buttons, call queue, full stats
 //   Step 3 → Google Places API import
 //   Step 4 → auto-match signups to leads (invite → trial tracking)
 //
@@ -21,6 +28,7 @@
 // ─────────────────────────────────────────────────────────────
 
 const { ObjectId } = require("mongodb");
+const email2 = require("./email2");
 
 // ── FAVICON (optional) ───────────────────────
 // Paste the same base64 favicon string you used in admin.js
@@ -66,15 +74,27 @@ var TZ_LABEL = {
 var STAGES = ["new", "no_answer", "spoke", "interested", "invited", "trial", "customer", "lost"];
 
 var STAGE_META = {
-  new:            { label: "NEW",            color: "#6b84a0" },
-  no_answer:      { label: "NO ANSWER",      color: "#96aec6" },
-  spoke:          { label: "SPOKE",          color: "#4a9eda" },
-  interested:     { label: "INTERESTED",     color: "#E8791A" },
-  invited:        { label: "INVITED",        color: "#d4a017" },
-  trial:          { label: "TRIAL",          color: "#3ecf8e" },
-  customer:       { label: "CUSTOMER",       color: "#3ecf8e" },
-  lost:           { label: "LOST",           color: "#f05252" },
+  new:        { label: "NEW",        color: "#6b84a0" },
+  no_answer:  { label: "NO ANSWER",  color: "#96aec6" },
+  spoke:      { label: "SPOKE",      color: "#4a9eda" },
+  interested: { label: "INTERESTED", color: "#E8791A" },
+  invited:    { label: "INVITED",    color: "#d4a017" },
+  trial:      { label: "TRIAL",      color: "#3ecf8e" },
+  customer:   { label: "CUSTOMER",   color: "#3ecf8e" },
+  lost:       { label: "LOST",       color: "#f05252" },
 };
+
+// Outcomes you can log + what stage each one moves the lead to
+var OUTCOMES = {
+  no_answer:      { stage: "no_answer",  connect: false, label: "No Answer" },
+  voicemail:      { stage: "no_answer",  connect: false, label: "Voicemail" },
+  spoke:          { stage: "spoke",      connect: true,  label: "Spoke" },
+  not_interested: { stage: "lost",       connect: true,  label: "Not Interested" },
+  interested:     { stage: "interested", connect: true,  label: "Interested" },
+};
+
+// Stages that still belong in the active calling pipeline
+var CALLABLE_STAGES = ["new", "no_answer", "spoke"];
 
 // ─────────────────────────────────────────────
 // AUTH MIDDLEWARE (same pattern as admin.js)
@@ -128,6 +148,11 @@ function localTimeFor(timezone) {
   }
 }
 
+function inCallingWindow(timezone) {
+  var lt = localTimeFor(timezone);
+  return lt.hour >= 8 && lt.hour < 18;
+}
+
 function escapeHtml(s) {
   if (s === null || s === undefined) return "";
   return String(s)
@@ -136,6 +161,11 @@ function escapeHtml(s) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function escapeJs(s) {
+  if (s === null || s === undefined) return "";
+  return String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/"/g, "&quot;");
 }
 
 function validateLeadData(data) {
@@ -154,30 +184,182 @@ function validateLeadData(data) {
 }
 
 // ─────────────────────────────────────────────
+// STATS — computed from callAttempts + stages
+// ─────────────────────────────────────────────
+function computeStats(leads) {
+  var now = new Date();
+  var todayStart = new Date(now);
+  todayStart.setHours(0, 0, 0, 0);
+  var weekStart = new Date(now - 7 * 24 * 60 * 60 * 1000);
+
+  var dialsToday = 0;
+  var dialsWeek  = 0;
+  var dialsAll   = 0;
+  var connectsWeek = 0;
+
+  for (var i = 0; i < leads.length; i++) {
+    var attempts = leads[i].callAttempts || [];
+    for (var j = 0; j < attempts.length; j++) {
+      var a = attempts[j];
+      var at = new Date(a.at);
+      dialsAll++;
+      if (at >= weekStart) {
+        dialsWeek++;
+        var meta = OUTCOMES[a.outcome];
+        if (meta && meta.connect) connectsWeek++;
+      }
+      if (at >= todayStart) dialsToday++;
+    }
+  }
+
+  var invited   = leads.filter(function(l) { return ["invited", "trial", "customer"].indexOf(l.stage) !== -1; }).length;
+  var trials    = leads.filter(function(l) { return l.stage === "trial" || l.stage === "customer"; }).length;
+  var customers = leads.filter(function(l) { return l.stage === "customer"; }).length;
+
+  return {
+    dialsToday:   dialsToday,
+    dialsWeek:    dialsWeek,
+    dialsAll:     dialsAll,
+    connectRate:  dialsWeek > 0 ? Math.round((connectsWeek / dialsWeek) * 100) : 0,
+    invited:      invited,
+    trials:       trials,
+    customers:    customers,
+    dialsPerCustomer: customers > 0 ? Math.round(dialsAll / customers) : null,
+  };
+}
+
+// ─────────────────────────────────────────────
+// CALL QUEUE — what should Ian call right now?
+// 1. Callbacks that are due (highest priority, shown even outside window)
+// 2. Callable leads currently inside their 8am-6pm local window
+//    (new leads first, then least-recently-attempted)
+// ─────────────────────────────────────────────
+function buildQueue(leads) {
+  var now = new Date();
+
+  var active = leads.filter(function(l) {
+    return !l.doNotCall && CALLABLE_STAGES.indexOf(l.stage) !== -1;
+  });
+
+  var dueCallbacks = active.filter(function(l) {
+    return l.callbackAt && new Date(l.callbackAt) <= now;
+  });
+  dueCallbacks.sort(function(a, b) { return new Date(a.callbackAt) - new Date(b.callbackAt); });
+
+  var ready = active.filter(function(l) {
+    if (l.callbackAt) return false; // scheduled - wait for its slot
+    return inCallingWindow(l.timezone);
+  });
+  ready.sort(function(a, b) {
+    var aNew = a.stage === "new" ? 0 : 1;
+    var bNew = b.stage === "new" ? 0 : 1;
+    if (aNew !== bNew) return aNew - bNew;
+    var aLast = (a.callAttempts && a.callAttempts.length > 0) ? new Date(a.callAttempts[a.callAttempts.length - 1].at) : new Date(0);
+    var bLast = (b.callAttempts && b.callAttempts.length > 0) ? new Date(b.callAttempts[b.callAttempts.length - 1].at) : new Date(0);
+    return aLast - bLast;
+  });
+
+  return { dueCallbacks: dueCallbacks, ready: ready.slice(0, 12) };
+}
+
+// ─────────────────────────────────────────────
+// QUEUE CARD HTML
+// ─────────────────────────────────────────────
+function buildQueueCard(l, isCallback) {
+  var lt = localTimeFor(l.timezone);
+  var tzLabel = TZ_LABEL[l.timezone] || "";
+  var location = [l.city, l.state].filter(Boolean).join(", ") || "-";
+  var attemptsCount = (l.callAttempts || []).length;
+  var lastNote = (l.notes && l.notes.length > 0) ? l.notes[l.notes.length - 1].text : "";
+  var ownerAttr = escapeJs(l.ownerName || "");
+  var emailAttr = escapeJs(l.email || "");
+  var meta = STAGE_META[l.stage] || STAGE_META.new;
+  var inWindow = lt.hour >= 8 && lt.hour < 18;
+
+  var badge = isCallback
+    ? "<span style='background:rgba(232,121,26,0.15);color:#E8791A;padding:3px 10px;border-radius:100px;font-size:10px;font-weight:800;'>CALLBACK DUE</span>"
+    : "<span style='color:" + meta.color + ";font-size:10px;font-weight:800;letter-spacing:0.5px;'>" + meta.label + "</span>";
+
+  var windowNote = !inWindow
+    ? "<span style='color:#f05252;font-size:11px;font-weight:700;margin-left:8px;'>outside their window</span>"
+    : "";
+
+  var btn = function(label, outcome, bg, color, border) {
+    return "<button onclick='logCall(\"" + l._id + "\",\"" + outcome + "\",\"" + emailAttr + "\",\"" + ownerAttr + "\")' " +
+      "style='background:" + bg + ";border:1px solid " + border + ";color:" + color + ";border-radius:8px;padding:9px 14px;font-family:Nunito,sans-serif;font-size:12px;font-weight:800;cursor:pointer;'>" + label + "</button>";
+  };
+
+  return "<div style='background:rgba(255,255,255,0.038);border:1px solid rgba(255,255,255,0.09);border-radius:14px;padding:18px;margin-bottom:12px;'>" +
+    "<div style='display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;'>" +
+    "<div>" +
+    "<div style='font-family:Nunito,sans-serif;font-size:16px;font-weight:900;color:#fff;'>" + escapeHtml(l.businessName) + " " + badge + "</div>" +
+    "<div style='font-size:12px;color:#6b84a0;margin-top:3px;'>" + escapeHtml(l.ownerName || "owner unknown") + " &mdash; " + escapeHtml(location) +
+    " &mdash; <span style='color:" + (inWindow ? "#3ecf8e" : "#f05252") + ";font-weight:700;'>" + lt.time + " " + tzLabel + "</span>" + windowNote +
+    " &mdash; " + attemptsCount + " attempt" + (attemptsCount !== 1 ? "s" : "") + "</div>" +
+    (lastNote ? "<div style='font-size:12px;color:#96aec6;margin-top:5px;'>&#8220;" + escapeHtml(lastNote) + "&#8221;</div>" : "") +
+    "</div>" +
+    "<a href='tel:" + escapeHtml(l.phone) + "' style='font-family:Nunito,sans-serif;font-size:18px;font-weight:900;color:#E8791A;text-decoration:none;white-space:nowrap;'>" + escapeHtml(l.phone) + "</a>" +
+    "</div>" +
+    "<div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;'>" +
+    btn("No Answer", "no_answer", "rgba(255,255,255,0.05)", "#96aec6", "rgba(255,255,255,0.12)") +
+    btn("Voicemail", "voicemail", "rgba(255,255,255,0.05)", "#96aec6", "rgba(255,255,255,0.12)") +
+    btn("Spoke", "spoke", "rgba(74,158,218,0.12)", "#4a9eda", "rgba(74,158,218,0.3)") +
+    btn("Not Interested", "not_interested", "rgba(240,82,82,0.1)", "#f05252", "rgba(240,82,82,0.25)") +
+    btn("Interested &#8594; Invite", "interested", "#E8791A", "#fff", "#E8791A") +
+    "<button onclick='setCallback(\"" + l._id + "\")' style='background:rgba(255,255,255,0.03);border:1px dashed rgba(255,255,255,0.2);color:#6b84a0;border-radius:8px;padding:9px 14px;font-family:Nunito,sans-serif;font-size:12px;font-weight:800;cursor:pointer;'>&#128197; Callback</button>" +
+    "</div>" +
+    "</div>";
+}
+
+// ─────────────────────────────────────────────
 // SALES DASHBOARD HTML
 // ─────────────────────────────────────────────
 function buildSalesDashboardHtml(leads) {
   var now = new Date();
+  var stats = computeStats(leads);
+  var queue = buildQueue(leads);
 
-  // ── Stat cards ──
+  // ── Stat cards (row 1: pipeline, row 2: activity) ──
   var total      = leads.length;
   var fresh      = leads.filter(function(l) { return l.stage === "new"; }).length;
   var interested = leads.filter(function(l) { return l.stage === "interested" || l.stage === "invited"; }).length;
   var won        = leads.filter(function(l) { return l.stage === "trial" || l.stage === "customer"; }).length;
   var dnc        = leads.filter(function(l) { return l.doNotCall; }).length;
 
-  var statCards = [
-    { n: total,      label: "Total Leads",         color: "#fff"     },
-    { n: fresh,      label: "New (Not Called)",    color: "#6b84a0"  },
-    { n: interested, label: "Interested / Invited", color: "#E8791A" },
-    { n: won,        label: "Trial / Customer",    color: "#3ecf8e"  },
-    { n: dnc,        label: "Do Not Call",         color: "#f05252"  },
-  ].map(function(s) {
+  function card(n, label, color) {
     return "<div style='background:rgba(255,255,255,0.038);border:1px solid rgba(255,255,255,0.07);border-radius:14px;padding:16px;text-align:center;'>" +
-      "<div style='font-family:Nunito,sans-serif;font-size:28px;font-weight:900;color:" + s.color + ";letter-spacing:-1px;'>" + s.n + "</div>" +
-      "<div style='font-size:11px;color:#6b84a0;margin-top:4px;'>" + s.label + "</div>" +
+      "<div style='font-family:Nunito,sans-serif;font-size:28px;font-weight:900;color:" + color + ";letter-spacing:-1px;'>" + n + "</div>" +
+      "<div style='font-size:11px;color:#6b84a0;margin-top:4px;'>" + label + "</div>" +
       "</div>";
-  }).join("");
+  }
+
+  var pipelineCards =
+    card(total, "Total Leads", "#fff") +
+    card(fresh, "New (Not Called)", "#6b84a0") +
+    card(interested, "Interested / Invited", "#E8791A") +
+    card(won, "Trial / Customer", "#3ecf8e") +
+    card(dnc, "Do Not Call", "#f05252");
+
+  var activityCards =
+    card(stats.dialsToday, "Dials Today", "#fff") +
+    card(stats.dialsWeek, "Dials (7 Days)", "#fff") +
+    card(stats.connectRate + "%", "Connect Rate (7d)", stats.connectRate >= 20 ? "#3ecf8e" : "#E8791A") +
+    card(stats.invited, "Invites Sent", "#d4a017") +
+    card(stats.dialsPerCustomer !== null ? stats.dialsPerCustomer : "-", "Dials per Customer", "#3ecf8e");
+
+  // ── Call queue ──
+  var queueHtml = "";
+  if (queue.dueCallbacks.length > 0) {
+    queueHtml += "<h2 style='font-family:Nunito,sans-serif;font-size:16px;font-weight:900;margin:24px 0 12px;'>Callbacks Due (" + queue.dueCallbacks.length + ")</h2>";
+    queueHtml += queue.dueCallbacks.map(function(l) { return buildQueueCard(l, true); }).join("");
+  }
+  queueHtml += "<h2 style='font-family:Nunito,sans-serif;font-size:16px;font-weight:900;margin:24px 0 12px;'>Ready to Call (" + queue.ready.length + ")</h2>";
+  if (queue.ready.length > 0) {
+    queueHtml += queue.ready.map(function(l) { return buildQueueCard(l, false); }).join("");
+  } else {
+    queueHtml += "<div style='background:rgba(62,207,142,0.08);border:1px solid rgba(62,207,142,0.2);border-radius:12px;padding:14px 18px;font-size:13px;color:#3ecf8e;'>" +
+      "Nothing in the calling window right now. Leads appear here when it's 8am&ndash;6pm their local time.</div>";
+  }
 
   // ── Stage filter options ──
   var stageOptions = "<option value='all'>All stages</option>" +
@@ -194,10 +376,15 @@ function buildSalesDashboardHtml(leads) {
     var tzLabel = TZ_LABEL[l.timezone] || "";
     var location = [l.city, l.state].filter(Boolean).join(", ") || "-";
     var lastNote = (l.notes && l.notes.length > 0) ? l.notes[l.notes.length - 1].text : "";
-    var added = l.createdAt ? new Date(l.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "-";
+    var attemptsCount = (l.callAttempts || []).length;
     var dncStyle = l.doNotCall ? "opacity:0.45;" : "";
     var websiteLink = l.website
       ? " <a href='" + escapeHtml(l.website) + "' target='_blank' style='color:#6b84a0;font-size:11px;text-decoration:none;'>site &#8599;</a>"
+      : "";
+    var callbackInfo = l.callbackAt
+      ? "<div style='font-size:10px;color:#E8791A;font-weight:700;margin-top:2px;'>&#128197; " +
+        new Date(l.callbackAt).toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " " +
+        new Date(l.callbackAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) + "</div>"
       : "";
 
     return "<tr class='lead-row' data-stage='" + l.stage + "' style='border-bottom:1px solid rgba(255,255,255,0.07);" + dncStyle + "'>" +
@@ -215,10 +402,11 @@ function buildSalesDashboardHtml(leads) {
       "</td>" +
       "<td style='padding:12px 16px;text-align:center;'>" +
         "<span style='color:" + meta.color + ";font-size:11px;font-weight:800;letter-spacing:0.5px;'>" + meta.label + "</span>" +
+        "<div style='font-size:10px;color:#6b84a0;margin-top:2px;'>" + attemptsCount + " call" + (attemptsCount !== 1 ? "s" : "") + "</div>" +
+        callbackInfo +
         (l.doNotCall ? "<div style='font-size:10px;color:#f05252;font-weight:800;margin-top:2px;'>DNC</div>" : "") +
       "</td>" +
       "<td class='hide-mobile' style='padding:12px 16px;font-size:12px;color:#96aec6;max-width:200px;'>" + escapeHtml(lastNote) + "</td>" +
-      "<td class='hide-mobile' style='padding:12px 16px;font-size:12px;color:#6b84a0;text-align:center;'>" + added + "</td>" +
       "<td style='padding:12px 16px;text-align:center;white-space:nowrap;'>" +
         "<button onclick='editLead(\"" + l._id + "\")' style='background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:#96aec6;border-radius:6px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer;margin-right:4px;'>Edit</button>" +
         "<button onclick='toggleDnc(\"" + l._id + "\"," + (l.doNotCall ? "false" : "true") + ")' style='background:rgba(240,82,82,0.1);border:1px solid rgba(240,82,82,0.25);color:#f05252;border-radius:6px;padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer;'>" + (l.doNotCall ? "Un-DNC" : "DNC") + "</button>" +
@@ -226,7 +414,7 @@ function buildSalesDashboardHtml(leads) {
       "</tr>";
   }).join("");
 
-  // ── Add Lead form ──
+  // ── Add Lead form (collapsible now the queue is the main view) ──
   var stateOptions = Object.keys(STATE_TZ).sort().map(function(s) {
     return "<option value='" + s + "'>" + s + "</option>";
   }).join("");
@@ -234,7 +422,8 @@ function buildSalesDashboardHtml(leads) {
   var inputStyle = "background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:11px 14px;font-size:14px;color:#fff;font-family:DM Sans,sans-serif;outline:none;width:100%;";
 
   var addLeadForm =
-    "<h2 style='font-family:Nunito,sans-serif;font-size:16px;font-weight:900;margin:24px 0 12px;'>Add Lead</h2>" +
+    "<details style='margin-top:24px;'>" +
+    "<summary style='font-family:Nunito,sans-serif;font-size:16px;font-weight:900;cursor:pointer;margin-bottom:12px;color:#E8791A;'>+ Add Lead Manually</summary>" +
     "<div style='background:rgba(255,255,255,0.025);border:1px solid var(--border);border-radius:14px;padding:20px;'>" +
     "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;'>" +
     "<input id='lead-business' type='text' placeholder='Business name *' style='" + inputStyle + "'/>" +
@@ -250,12 +439,56 @@ function buildSalesDashboardHtml(leads) {
     "<button id='lead-btn' onclick='addLead()' style='background:#E8791A;color:#fff;border:none;border-radius:8px;padding:11px 28px;font-family:Nunito,sans-serif;font-size:14px;font-weight:800;cursor:pointer;'>Add Lead</button>" +
     "<span id='lead-msg' style='font-size:13px;'></span>" +
     "</div>" +
-    "</div>";
+    "</div>" +
+    "</details>";
 
   // ── Page JS ──
   var script =
     "<script>" +
     "function getSecret(){return new URLSearchParams(window.location.search).get('secret');}" +
+
+    "async function logCall(id,outcome,email,owner){" +
+    "var body={outcome:outcome};" +
+    "if(outcome==='spoke'){" +
+    "var note=prompt('Quick note from the call:');" +
+    "if(note===null)return;" +
+    "if(note.trim())body.note=note.trim();" +
+    "}" +
+    "if(outcome==='interested'){" +
+    "var useEmail=email;" +
+    "if(!useEmail){" +
+    "useEmail=prompt('Their email for the invitation:');" +
+    "if(useEmail===null)return;" +
+    "useEmail=useEmail.trim();" +
+    "if(useEmail&&useEmail.indexOf('@')!==-1){body.email=useEmail;}" +
+    "else{alert('No valid email - lead will be marked INTERESTED but no invite sent. Add their email via Edit and tap Interested again to send it.');}" +
+    "}" +
+    "var useName=owner;" +
+    "if(!useName){" +
+    "useName=prompt('Their first name (optional, makes the invite personal):');" +
+    "if(useName&&useName.trim())body.name=useName.trim();" +
+    "}" +
+    "var inote=prompt('Quick note from the call (optional):');" +
+    "if(inote&&inote.trim())body.note=inote.trim();" +
+    "}" +
+    "try{" +
+    "var r=await fetch('/admin/sales/leads/'+id+'/log?secret='+encodeURIComponent(getSecret()),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});" +
+    "var d=await r.json();" +
+    "if(r.ok){location.reload();}" +
+    "else{alert((d&&(d.message||d.error))||'Failed to log call');}" +
+    "}catch(e){alert('Network error: '+e.message);}" +
+    "}" +
+
+    "async function setCallback(id){" +
+    "var hours=prompt('Call back in how many hours? (e.g. 2 = later today, 24 = tomorrow, 0 = clear callback)');" +
+    "if(hours===null)return;" +
+    "hours=Number(hours);" +
+    "if(isNaN(hours)||hours<0){alert('Enter a number of hours');return;}" +
+    "try{" +
+    "var r=await fetch('/admin/sales/leads/'+id+'?secret='+encodeURIComponent(getSecret()),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({callbackHours:hours})});" +
+    "if(r.ok){location.reload();}else{var d=await r.json();alert((d&&(d.message||d.error))||'Update failed');}" +
+    "}catch(e){alert('Network error: '+e.message);}" +
+    "}" +
 
     "async function addLead(){" +
     "var msg=document.getElementById('lead-msg');" +
@@ -330,7 +563,9 @@ function buildSalesDashboardHtml(leads) {
     "<span style='font-size:12px;color:#6b84a0;'>" + dateStr + "</span>" +
     "</div></div>" +
     "<div class='wrap' style='padding-top:28px;'>" +
-    "<div style='display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:24px;'>" + statCards + "</div>" +
+    "<div style='display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:10px;'>" + pipelineCards + "</div>" +
+    "<div style='display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px;'>" + activityCards + "</div>" +
+    queueHtml +
     addLeadForm +
     "<div style='display:flex;align-items:center;justify-content:space-between;margin:24px 0 12px;'>" +
     "<h2 style='font-family:Nunito,sans-serif;font-size:16px;font-weight:900;'>All Leads (" + total + ")</h2>" +
@@ -338,9 +573,9 @@ function buildSalesDashboardHtml(leads) {
     "</div>" +
     "<div style='background:rgba(255,255,255,0.025);border:1px solid var(--border);border-radius:14px;overflow:hidden;'>" +
     "<table><thead><tr style='border-bottom:1px solid var(--border);'>" +
-    "<th>Business</th><th>Phone / Email</th><th>Location / Local Time</th><th style='text-align:center;'>Stage</th><th class='hide-mobile'>Last Note</th><th class='hide-mobile' style='text-align:center;'>Added</th><th style='text-align:center;'>Actions</th>" +
+    "<th>Business</th><th>Phone / Email</th><th>Location / Local Time</th><th style='text-align:center;'>Stage</th><th class='hide-mobile'>Last Note</th><th style='text-align:center;'>Actions</th>" +
     "</tr></thead><tbody>" +
-    (rows || "<tr><td colspan='7' style='padding:40px;text-align:center;color:#6b84a0;'>No leads yet - add your first one above</td></tr>") +
+    (rows || "<tr><td colspan='6' style='padding:40px;text-align:center;color:#6b84a0;'>No leads yet - add your first one above</td></tr>") +
     "</tbody></table></div>" +
     "<p style='font-size:12px;color:#6b84a0;margin-top:16px;text-align:center;'>Green local time = inside calling window (8am-6pm their time) &mdash; Red = outside window</p>" +
     "</div>" +
@@ -378,6 +613,116 @@ function registerSalesRoutes(app, db) {
       res.send(buildSalesDashboardHtml(leads));
     } catch (err) {
       res.status(500).send("Error: " + err.message);
+    }
+  });
+
+  // ── LOG A CALL (one-tap) ──────────────────────────────────
+  // POST /admin/sales/leads/:id/log
+  // Body: { outcome*, note?, email?, name? }
+  // outcome: no_answer | voicemail | spoke | not_interested | interested
+  //
+  // interested + an email on file (or in body) → sends the
+  // invitation email via email2.js and moves stage to "invited"
+  app.post("/admin/sales/leads/:id/log", requireAdminAuth, async (req, res) => {
+    try {
+      let leadId;
+      try {
+        leadId = new ObjectId(req.params.id);
+      } catch (e) {
+        return res.status(400).json({ error: "Invalid lead id" });
+      }
+
+      const outcome = req.body.outcome;
+      const outcomeMeta = OUTCOMES[outcome];
+      if (!outcomeMeta) {
+        return res.status(400).json({
+          error: "Validation failed",
+          message: "outcome must be one of: " + Object.keys(OUTCOMES).join(", "),
+        });
+      }
+
+      const lead = await db.collection("leads").findOne({ _id: leadId });
+      if (!lead) {
+        return res.status(404).json({ error: "Lead not found" });
+      }
+
+      const now = new Date();
+      const note = req.body.note && String(req.body.note).trim() ? String(req.body.note).trim() : null;
+
+      const setOps = {
+        stage: outcomeMeta.stage,
+        updatedAt: now,
+        callbackAt: null, // a logged call consumes any scheduled callback
+      };
+      const pushOps = {
+        callAttempts: { at: now, outcome: outcome, note: note },
+      };
+      if (note) {
+        pushOps.notes = { at: now, text: note };
+      }
+
+      // Optional contact details that arrived with the call
+      if (req.body.email && String(req.body.email).includes("@")) {
+        setOps.email = String(req.body.email).trim();
+      }
+      if (req.body.name && String(req.body.name).trim()) {
+        setOps.ownerName = String(req.body.name).trim();
+      }
+
+      let inviteSent = false;
+      let inviteMessage = "";
+
+      // ── Interested → fire the invitation email ──
+      if (outcome === "interested") {
+        const inviteEmail = setOps.email || lead.email;
+        const inviteName  = setOps.ownerName || lead.ownerName || "";
+
+        if (inviteEmail) {
+          try {
+            await email2.sendInvitationEmail(inviteEmail, inviteName);
+            inviteSent = true;
+            setOps.stage = "invited";
+            inviteMessage = "Invitation sent to " + inviteEmail;
+            if (!pushOps.notes) {
+              pushOps.notes = { at: now, text: "Invitation email sent to " + inviteEmail };
+            }
+            // Log in the shared invitations collection (same as admin dashboard invites)
+            try {
+              await db.collection("invitations").insertOne({
+                email:  inviteEmail,
+                name:   inviteName || null,
+                leadId: leadId,
+                sentAt: now,
+              });
+            } catch (logErr) {
+              console.error("Invitation log failed:", logErr.message);
+            }
+          } catch (emailErr) {
+            console.error("Invitation email failed:", emailErr.message);
+            inviteMessage = "Marked interested, but the invitation email FAILED: " + emailErr.message;
+            // stage stays "interested" so you can retry
+          }
+        } else {
+          inviteMessage = "Marked interested. No email on file - add their email via Edit, then tap Interested again to send the invite.";
+        }
+      }
+
+      await db.collection("leads").updateOne(
+        { _id: leadId },
+        { $set: setOps, $push: pushOps }
+      );
+
+      console.log("Call logged: " + lead.businessName + " - " + outcome + (inviteSent ? " (invite sent)" : ""));
+
+      res.json({
+        success: true,
+        message: inviteMessage || (outcomeMeta.label + " logged for " + lead.businessName),
+        stage: setOps.stage,
+        inviteSent: inviteSent,
+      });
+    } catch (err) {
+      console.error("Log call error:", err.message);
+      res.status(500).json({ error: err.message });
     }
   });
 
@@ -444,8 +789,8 @@ function registerSalesRoutes(app, db) {
   // ── EDIT LEAD ─────────────────────────────────────────────
   // PUT /admin/sales/leads/:id
   // Body: any of { email, ownerName, website, city, state,
-  //                doNotCall, note }
-  // (stage changes happen via call logging in Step 2)
+  //                doNotCall, note, callbackHours }
+  // callbackHours: number of hours from now (0 = clear callback)
   app.put("/admin/sales/leads/:id", requireAdminAuth, async (req, res) => {
     try {
       let leadId;
@@ -477,6 +822,13 @@ function registerSalesRoutes(app, db) {
         updates.timezone = timezoneForState(state);
       }
       if (req.body.doNotCall !== undefined) updates.doNotCall = req.body.doNotCall === true;
+      if (req.body.callbackHours !== undefined) {
+        const hours = Number(req.body.callbackHours);
+        if (isNaN(hours) || hours < 0) {
+          return res.status(400).json({ error: "Validation failed", message: "callbackHours must be a number >= 0" });
+        }
+        updates.callbackAt = hours === 0 ? null : new Date(Date.now() + hours * 60 * 60 * 1000);
+      }
 
       const ops = {};
       if (Object.keys(updates).length > 0) {
@@ -509,18 +861,23 @@ module.exports = { registerSalesRoutes };
 // INTEGRATION INSTRUCTIONS
 // ─────────────────────────────────────────────────────────────
 //
-// STEP 1 — Add require at top of server.js (next to the admin require):
+// Same as Step 1 - no server.js changes needed if Step 1 is
+// already wired in:
 //   const { registerSalesRoutes } = require("./sales");
+//   registerSalesRoutes(app, db);   // inside the MongoDB .then()
 //
-// STEP 2 — Register routes after MongoDB connects.
-// In your MongoDB .then() block, right after registerAdminRoutes, add:
-//   registerSalesRoutes(app, db);
+// REQUIRES: email2.js deployed in the same folder (the
+// Interested button uses email2.sendInvitationEmail).
 //
-// STEP 3 — Open the dashboard:
-//   https://missed-call-bot-production.up.railway.app/admin/sales?secret=zeromisscall123
-//
-// STEP 4 — Add a test lead with the form, check it appears in the
-// table with the correct local time for its state, then test the
-// Edit and DNC buttons.
+// TEST CHECKLIST:
+// 1. /admin/sales?secret=... - queue section appears above the table
+// 2. Add a test lead (your own email) - it shows in "Ready to Call"
+//    if it's 8am-6pm in its state's timezone
+// 3. Tap "No Answer" - attempt count goes to 1, stage = NO ANSWER,
+//    Dials Today goes to 1
+// 4. Tap "Callback", enter 1 - lead leaves the ready list and shows
+//    a callback time in the table
+// 5. Tap "Interested → Invite" - invitation email arrives, stage =
+//    INVITED, Invites Sent stat increments
 //
 // ─────────────────────────────────────────────────────────────
