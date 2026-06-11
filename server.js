@@ -1,5 +1,6 @@
 require("dotenv").config();
 const express = require("express");
+const { registerSalesRoutes } = require("./sales");
 const twilio = require("twilio");
 const { OpenAI } = require("openai");
 const { MongoClient } = require("mongodb");
@@ -57,6 +58,7 @@ MongoClient.connect(process.env.MONGODB_URI)
     db_helpers.ensureIndexes(db);
     initScheduler(app, db, db_helpers, emailService);
     registerAdminRoutes(app, db, db_helpers, emailService);
+    registerSalesRoutes(app, db);
     registerDashboardRoute(app, db, db_helpers);
     registerBillingRoutes(app, db, db_helpers, emailService);
     console.log("✅ MongoDB connected");
