@@ -1,30 +1,32 @@
 // ─────────────────────────────────────────────────────────────
-// SALES DASHBOARD — STEP 2
+// SALES DASHBOARD — STEP 3
 // ZeroMissCall outbound sales machine
 //
 // HOW TO USE:
-// 1. Save this file as sales.js (replaces the Step 1 version)
-// 2. server.js integration is unchanged from Step 1:
+// 1. Save this file as sales.js (replaces the Step 2 version)
+// 2. server.js integration is unchanged:
 //      const { registerSalesRoutes } = require("./sales");
 //      registerSalesRoutes(app, db);
 //
-// WHAT THIS DOES (Step 1 + Step 2):
+// WHAT THIS DOES (Steps 1 + 2 + 3):
 //   GET  /admin/sales                  → sales dashboard HTML page
 //   POST /admin/sales/leads            → add a lead manually
-//   PUT  /admin/sales/leads/:id        → edit a lead (email, name, notes,
-//                                        do-not-call, callback scheduling)
+//   PUT  /admin/sales/leads/:id        → edit a lead
 //   POST /admin/sales/leads/:id/log    → one-tap call logging
-//                                        (no_answer / voicemail / spoke /
-//                                         not_interested / interested)
-//                                        interested = auto-sends the
-//                                        invitation email via email2.js
+//   POST /admin/sales/import/csv       → bulk import leads from CSV  [NEW]
+//   POST /admin/sales/import/osm       → free OpenStreetMap city     [NEW]
+//                                        search (no API key needed)
 //
-// Coming in later steps:
-//   Step 3 → Google Places API import
-//   Step 4 → auto-match signups to leads (invite → trial tracking)
+// FREE DATA SOURCES THAT FEED THE CSV IMPORT:
+//   - State plumbing license rosters (TX TDLR, FL DBPR, etc.)
+//   - Scraper tool free-trial exports (Outscraper, Scrap.io)
+//   - Anything you compile by hand in a spreadsheet
 //
-// All routes protected by ADMIN_SECRET (same as admin.js)
-// Data lives in the "leads" collection in your existing MongoDB
+// Coming in Step 4:
+//   auto-match signups to leads (invite → trial tracking)
+//
+// REQUIRES: email2.js in the same folder, Node 18+ (for fetch -
+// Railway's default is fine)
 // ─────────────────────────────────────────────────────────────
 
 const { ObjectId } = require("mongodb");
@@ -38,7 +40,6 @@ var SALES_FAVICON = "PASTE_YOUR_BASE64_FAVICON_STRING_HERE";
 
 // ─────────────────────────────────────────────
 // STATE → TIMEZONE MAP (v1: primary timezone per state)
-// Used to show each lead's local time so you call in their window
 // ─────────────────────────────────────────────
 var STATE_TZ = {
   AL: "America/Chicago",     AK: "America/Anchorage",   AZ: "America/Phoenix",
@@ -84,7 +85,6 @@ var STAGE_META = {
   lost:       { label: "LOST",       color: "#f05252" },
 };
 
-// Outcomes you can log + what stage each one moves the lead to
 var OUTCOMES = {
   no_answer:      { stage: "no_answer",  connect: false, label: "No Answer" },
   voicemail:      { stage: "no_answer",  connect: false, label: "Voicemail" },
@@ -93,8 +93,9 @@ var OUTCOMES = {
   interested:     { stage: "interested", connect: true,  label: "Interested" },
 };
 
-// Stages that still belong in the active calling pipeline
 var CALLABLE_STAGES = ["new", "no_answer", "spoke"];
+
+var MAX_CSV_ROWS = 2000;
 
 // ─────────────────────────────────────────────
 // AUTH MIDDLEWARE (same pattern as admin.js)
@@ -183,6 +184,87 @@ function validateLeadData(data) {
   return { errors: errors, phone: phone };
 }
 
+function newLeadDoc(fields, source) {
+  var now = new Date();
+  var state = fields.state ? String(fields.state).trim().toUpperCase() : "";
+  var lead = {
+    businessName: String(fields.businessName).trim(),
+    phone:        fields.phone,
+    email:        fields.email ? String(fields.email).trim() : null,
+    ownerName:    fields.ownerName ? String(fields.ownerName).trim() : null,
+    website:      fields.website ? String(fields.website).trim() : null,
+    city:         fields.city ? String(fields.city).trim() : null,
+    state:        state || null,
+    zip:          fields.zip ? String(fields.zip).trim() : null,
+    timezone:     timezoneForState(state),
+    source:       source,
+    stage:        "new",
+    doNotCall:    false,
+    notes:        [],
+    callbackAt:   null,
+    callAttempts: [],
+    createdAt:    now,
+    updatedAt:    now,
+  };
+  if (fields.note && String(fields.note).trim()) {
+    lead.notes.push({ at: now, text: String(fields.note).trim() });
+  }
+  return lead;
+}
+
+// ─────────────────────────────────────────────
+// CSV PARSER — handles quoted fields with commas
+// Rows are newline-separated (quoted newlines not supported in v1)
+// ─────────────────────────────────────────────
+function parseCsvLine(line) {
+  var fields = [];
+  var cur = "";
+  var inQuotes = false;
+  for (var i = 0; i < line.length; i++) {
+    var ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; }
+        else { inQuotes = false; }
+      } else {
+        cur += ch;
+      }
+    } else {
+      if (ch === '"') inQuotes = true;
+      else if (ch === ",") { fields.push(cur); cur = ""; }
+      else cur += ch;
+    }
+  }
+  fields.push(cur);
+  return fields.map(function(f) { return f.trim(); });
+}
+
+// Flexible header matching - works with state license rosters,
+// scraper exports, and hand-made spreadsheets
+var HEADER_MAP = {
+  businessName: ["businessname", "business", "name", "company", "companyname", "title", "dba", "tradename"],
+  phone:        ["phone", "phonenumber", "telephone", "tel", "phone1", "businessphone", "mobile", "cell"],
+  email:        ["email", "emailaddress", "mail"],
+  ownerName:    ["ownername", "owner", "contact", "contactname", "firstname", "fullname", "licensee", "licenseholder", "principal"],
+  city:         ["city", "town", "municipality"],
+  state:        ["state", "st", "region", "province"],
+  zip:          ["zip", "zipcode", "postalcode", "postcode"],
+  website:      ["website", "url", "web", "site", "domain", "homepage"],
+};
+
+function mapHeaders(headerRow) {
+  var mapping = {};
+  for (var i = 0; i < headerRow.length; i++) {
+    var clean = String(headerRow[i]).toLowerCase().replace(/[^a-z0-9]/g, "");
+    for (var field in HEADER_MAP) {
+      if (mapping[field] === undefined && HEADER_MAP[field].indexOf(clean) !== -1) {
+        mapping[field] = i;
+      }
+    }
+  }
+  return mapping;
+}
+
 // ─────────────────────────────────────────────
 // STATS — computed from callAttempts + stages
 // ─────────────────────────────────────────────
@@ -229,10 +311,7 @@ function computeStats(leads) {
 }
 
 // ─────────────────────────────────────────────
-// CALL QUEUE — what should Ian call right now?
-// 1. Callbacks that are due (highest priority, shown even outside window)
-// 2. Callable leads currently inside their 8am-6pm local window
-//    (new leads first, then least-recently-attempted)
+// CALL QUEUE
 // ─────────────────────────────────────────────
 function buildQueue(leads) {
   var now = new Date();
@@ -247,7 +326,7 @@ function buildQueue(leads) {
   dueCallbacks.sort(function(a, b) { return new Date(a.callbackAt) - new Date(b.callbackAt); });
 
   var ready = active.filter(function(l) {
-    if (l.callbackAt) return false; // scheduled - wait for its slot
+    if (l.callbackAt) return false;
     return inCallingWindow(l.timezone);
   });
   ready.sort(function(a, b) {
@@ -314,12 +393,11 @@ function buildQueueCard(l, isCallback) {
 // ─────────────────────────────────────────────
 // SALES DASHBOARD HTML
 // ─────────────────────────────────────────────
-function buildSalesDashboardHtml(leads) {
+function buildSalesDashboardHtml(leads, imports) {
   var now = new Date();
   var stats = computeStats(leads);
   var queue = buildQueue(leads);
 
-  // ── Stat cards (row 1: pipeline, row 2: activity) ──
   var total      = leads.length;
   var fresh      = leads.filter(function(l) { return l.stage === "new"; }).length;
   var interested = leads.filter(function(l) { return l.stage === "interested" || l.stage === "invited"; }).length;
@@ -360,6 +438,61 @@ function buildSalesDashboardHtml(leads) {
     queueHtml += "<div style='background:rgba(62,207,142,0.08);border:1px solid rgba(62,207,142,0.2);border-radius:12px;padding:14px 18px;font-size:13px;color:#3ecf8e;'>" +
       "Nothing in the calling window right now. Leads appear here when it's 8am&ndash;6pm their local time.</div>";
   }
+
+  // ── Import section ──
+  var stateOptions = Object.keys(STATE_TZ).sort().map(function(s) {
+    return "<option value='" + s + "'>" + s + "</option>";
+  }).join("");
+
+  var inputStyle = "background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:11px 14px;font-size:14px;color:#fff;font-family:DM Sans,sans-serif;outline:none;width:100%;";
+
+  var recentImports = "";
+  if (imports && imports.length > 0) {
+    recentImports = "<div style='margin-top:18px;'>" +
+      "<div style='font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:#6b84a0;font-weight:600;margin-bottom:6px;'>Recent imports</div>" +
+      imports.map(function(imp) {
+        var when = imp.at ? new Date(imp.at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "-";
+        return "<div style='display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.05);font-size:12px;'>" +
+          "<span style='color:#fff;font-weight:600;'>" + escapeHtml(imp.label || imp.type) + "</span>" +
+          "<span style='color:#6b84a0;'>" + imp.inserted + " added &middot; " + (imp.duplicates || 0) + " dupes &middot; " + when + "</span>" +
+          "</div>";
+      }).join("") +
+      "</div>";
+  }
+
+  var importSection =
+    "<details style='margin-top:24px;'>" +
+    "<summary style='font-family:Nunito,sans-serif;font-size:16px;font-weight:900;cursor:pointer;margin-bottom:12px;color:#E8791A;'>&#11015; Import Leads (CSV / OpenStreetMap)</summary>" +
+    "<div style='background:rgba(255,255,255,0.025);border:1px solid var(--border);border-radius:14px;padding:20px;'>" +
+
+    // -- OSM search --
+    "<p style='font-family:Nunito,sans-serif;font-size:13px;font-weight:800;color:#fff;margin-bottom:8px;'>Search OpenStreetMap (free, no key)</p>" +
+    "<p style='font-size:12px;color:#6b84a0;margin-bottom:12px;'>Finds plumbers mapped in a city. Coverage is patchy and phone numbers are hit-and-miss, but it costs nothing. Only results with a phone number are imported.</p>" +
+    "<div style='display:flex;gap:10px;flex-wrap:wrap;'>" +
+    "<input id='osm-city' type='text' placeholder='City (e.g. Dallas)' style='" + inputStyle + "flex:2;min-width:180px;width:auto;'/>" +
+    "<select id='osm-state' style='" + inputStyle + "flex:1;min-width:100px;width:auto;'><option value=''>State...</option>" + stateOptions + "</select>" +
+    "<button id='osm-btn' onclick='importOsm()' style='background:#E8791A;color:#fff;border:none;border-radius:8px;padding:11px 22px;font-family:Nunito,sans-serif;font-size:13px;font-weight:800;cursor:pointer;'>Search &amp; Import</button>" +
+    "</div>" +
+    "<div id='osm-msg' style='font-size:13px;margin-top:10px;min-height:16px;'></div>" +
+
+    "<div style='height:1px;background:rgba(255,255,255,0.08);margin:20px 0;'></div>" +
+
+    // -- CSV import --
+    "<p style='font-family:Nunito,sans-serif;font-size:13px;font-weight:800;color:#fff;margin-bottom:8px;'>Import CSV</p>" +
+    "<p style='font-size:12px;color:#6b84a0;margin-bottom:12px;'>Works with state license rosters, scraper exports, or your own spreadsheet. First row must be headers - it auto-detects columns like name/company, phone, email, owner/licensee, city, state, zip, website. Rows without a valid phone are skipped.</p>" +
+    "<div style='display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px;'>" +
+    "<input id='csv-file' type='file' accept='.csv,text/csv' style='color:#96aec6;font-size:13px;'/>" +
+    "<select id='csv-state' style='" + inputStyle + "width:auto;min-width:170px;'><option value=''>Default state (optional)...</option>" + stateOptions + "</select>" +
+    "<input id='csv-label' type='text' placeholder='Label (e.g. TX license roster)' style='" + inputStyle + "width:auto;min-width:200px;flex:1;'/>" +
+    "</div>" +
+    "<textarea id='csv-text' placeholder='...or paste CSV text here' rows='4' style='" + inputStyle + "resize:vertical;font-size:12px;'></textarea>" +
+    "<div style='display:flex;align-items:center;gap:14px;margin-top:12px;'>" +
+    "<button id='csv-btn' onclick='importCsv()' style='background:#E8791A;color:#fff;border:none;border-radius:8px;padding:11px 28px;font-family:Nunito,sans-serif;font-size:14px;font-weight:800;cursor:pointer;'>Import CSV</button>" +
+    "<span id='csv-msg' style='font-size:13px;'></span>" +
+    "</div>" +
+    recentImports +
+    "</div>" +
+    "</details>";
 
   // ── Stage filter options ──
   var stageOptions = "<option value='all'>All stages</option>" +
@@ -414,15 +547,9 @@ function buildSalesDashboardHtml(leads) {
       "</tr>";
   }).join("");
 
-  // ── Add Lead form (collapsible now the queue is the main view) ──
-  var stateOptions = Object.keys(STATE_TZ).sort().map(function(s) {
-    return "<option value='" + s + "'>" + s + "</option>";
-  }).join("");
-
-  var inputStyle = "background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:11px 14px;font-size:14px;color:#fff;font-family:DM Sans,sans-serif;outline:none;width:100%;";
-
+  // ── Add Lead form ──
   var addLeadForm =
-    "<details style='margin-top:24px;'>" +
+    "<details style='margin-top:16px;'>" +
     "<summary style='font-family:Nunito,sans-serif;font-size:16px;font-weight:900;cursor:pointer;margin-bottom:12px;color:#E8791A;'>+ Add Lead Manually</summary>" +
     "<div style='background:rgba(255,255,255,0.025);border:1px solid var(--border);border-radius:14px;padding:20px;'>" +
     "<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;'>" +
@@ -446,6 +573,42 @@ function buildSalesDashboardHtml(leads) {
   var script =
     "<script>" +
     "function getSecret(){return new URLSearchParams(window.location.search).get('secret');}" +
+
+    "async function importOsm(){" +
+    "var city=document.getElementById('osm-city').value.trim();" +
+    "var state=document.getElementById('osm-state').value;" +
+    "var msg=document.getElementById('osm-msg');" +
+    "var btn=document.getElementById('osm-btn');" +
+    "if(!city||!state){msg.style.color='#f05252';msg.textContent='City and state are both required';return;}" +
+    "btn.disabled=true;btn.textContent='Searching... (can take 30s)';msg.style.color='#96aec6';msg.textContent='Querying OpenStreetMap...';" +
+    "try{" +
+    "var r=await fetch('/admin/sales/import/osm?secret='+encodeURIComponent(getSecret()),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({city:city,state:state})});" +
+    "var d=await r.json();" +
+    "if(r.ok){msg.style.color='#3ecf8e';msg.textContent=d.message;if(d.inserted>0){setTimeout(function(){location.reload();},1800);}else{btn.disabled=false;btn.textContent='Search & Import';}}" +
+    "else{msg.style.color='#f05252';msg.textContent=(d&&(d.message||d.error))||'Import failed';btn.disabled=false;btn.textContent='Search & Import';}" +
+    "}catch(e){msg.style.color='#f05252';msg.textContent='Network error: '+e.message;btn.disabled=false;btn.textContent='Search & Import';}" +
+    "}" +
+
+    "async function importCsv(){" +
+    "var msg=document.getElementById('csv-msg');" +
+    "var btn=document.getElementById('csv-btn');" +
+    "var fileInput=document.getElementById('csv-file');" +
+    "var text=document.getElementById('csv-text').value;" +
+    "var label=document.getElementById('csv-label').value.trim();" +
+    "var defaultState=document.getElementById('csv-state').value;" +
+    "if(fileInput.files&&fileInput.files.length>0){" +
+    "text=await fileInput.files[0].text();" +
+    "if(!label)label=fileInput.files[0].name;" +
+    "}" +
+    "if(!text||!text.trim()){msg.style.color='#f05252';msg.textContent='Choose a CSV file or paste CSV text';return;}" +
+    "btn.disabled=true;btn.textContent='Importing...';msg.textContent='';" +
+    "try{" +
+    "var r=await fetch('/admin/sales/import/csv?secret='+encodeURIComponent(getSecret()),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({csv:text,label:label,defaultState:defaultState})});" +
+    "var d=await r.json();" +
+    "if(r.ok){msg.style.color='#3ecf8e';msg.textContent=d.message;if(d.inserted>0){setTimeout(function(){location.reload();},1800);}else{btn.disabled=false;btn.textContent='Import CSV';}}" +
+    "else{msg.style.color='#f05252';msg.textContent=(d&&(d.message||d.error))||'Import failed';btn.disabled=false;btn.textContent='Import CSV';}" +
+    "}catch(e){msg.style.color='#f05252';msg.textContent='Network error: '+e.message;btn.disabled=false;btn.textContent='Import CSV';}" +
+    "}" +
 
     "async function logCall(id,outcome,email,owner){" +
     "var body={outcome:outcome};" +
@@ -555,7 +718,7 @@ function buildSalesDashboardHtml(leads) {
     "<title>ZeroMissCall Sales</title>" +
     (SALES_FAVICON.indexOf("PASTE_") === 0 ? "" : "<link rel='icon' type='image/png' href='" + SALES_FAVICON + "'/>") +
     "<link href='https://fonts.googleapis.com/css2?family=Nunito:wght@700;800;900&family=DM+Sans:wght@400;500&display=swap' rel='stylesheet'>" +
-    "<style>:root{--navy:#0b1928;--orange:#E8791A;--green:#3ecf8e;--border:rgba(255,255,255,0.07);}*{box-sizing:border-box;margin:0;padding:0;}body{font-family:'DM Sans',sans-serif;background:#0b1928;color:#fff;min-height:100vh;-webkit-font-smoothing:antialiased;}.wrap{max-width:1100px;margin:0 auto;padding:0 20px 60px;}table{width:100%;border-collapse:collapse;}th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:#6b84a0;font-weight:600;padding:10px 16px;}tr:hover td{background:rgba(255,255,255,0.02);}input::placeholder{color:#5a7390;}select option{background:#0b1928;color:#fff;}@media(max-width:900px){.hide-mobile{display:none;}}</style>" +
+    "<style>:root{--navy:#0b1928;--orange:#E8791A;--green:#3ecf8e;--border:rgba(255,255,255,0.07);}*{box-sizing:border-box;margin:0;padding:0;}body{font-family:'DM Sans',sans-serif;background:#0b1928;color:#fff;min-height:100vh;-webkit-font-smoothing:antialiased;}.wrap{max-width:1100px;margin:0 auto;padding:0 20px 60px;}table{width:100%;border-collapse:collapse;}th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:#6b84a0;font-weight:600;padding:10px 16px;}tr:hover td{background:rgba(255,255,255,0.02);}input::placeholder,textarea::placeholder{color:#5a7390;}select option{background:#0b1928;color:#fff;}@media(max-width:900px){.hide-mobile{display:none;}}</style>" +
     "</head><body>" +
     "<div style='position:sticky;top:0;z-index:100;background:rgba(11,25,40,0.95);backdrop-filter:blur(24px);border-bottom:1px solid var(--border);padding:0 20px;'>" +
     "<div style='max-width:1100px;margin:0 auto;height:60px;display:flex;align-items:center;justify-content:space-between;'>" +
@@ -566,6 +729,7 @@ function buildSalesDashboardHtml(leads) {
     "<div style='display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:10px;'>" + pipelineCards + "</div>" +
     "<div style='display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px;'>" + activityCards + "</div>" +
     queueHtml +
+    importSection +
     addLeadForm +
     "<div style='display:flex;align-items:center;justify-content:space-between;margin:24px 0 12px;'>" +
     "<h2 style='font-family:Nunito,sans-serif;font-size:16px;font-weight:900;'>All Leads (" + total + ")</h2>" +
@@ -575,7 +739,7 @@ function buildSalesDashboardHtml(leads) {
     "<table><thead><tr style='border-bottom:1px solid var(--border);'>" +
     "<th>Business</th><th>Phone / Email</th><th>Location / Local Time</th><th style='text-align:center;'>Stage</th><th class='hide-mobile'>Last Note</th><th style='text-align:center;'>Actions</th>" +
     "</tr></thead><tbody>" +
-    (rows || "<tr><td colspan='6' style='padding:40px;text-align:center;color:#6b84a0;'>No leads yet - add your first one above</td></tr>") +
+    (rows || "<tr><td colspan='6' style='padding:40px;text-align:center;color:#6b84a0;'>No leads yet - import some above or add one manually</td></tr>") +
     "</tbody></table></div>" +
     "<p style='font-size:12px;color:#6b84a0;margin-top:16px;text-align:center;'>Green local time = inside calling window (8am-6pm their time) &mdash; Red = outside window</p>" +
     "</div>" +
@@ -584,8 +748,67 @@ function buildSalesDashboardHtml(leads) {
 }
 
 // ─────────────────────────────────────────────
+// OSM IMPORT — Nominatim geocode + Overpass query
+// Both free, no API keys. Be a polite citizen:
+// identify ourselves, low volume, 25km radius searches.
+// ─────────────────────────────────────────────
+async function fetchOsmPlumbers(city, state) {
+  // 1. Geocode the city with Nominatim
+  var nominatimUrl = "https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us&q=" +
+    encodeURIComponent(city + ", " + state + ", USA");
+  var geoRes = await fetch(nominatimUrl, {
+    headers: { "User-Agent": "ZeroMissCall-Sales/1.0 (contact: ian@zeromisscall.com)" },
+  });
+  if (!geoRes.ok) throw new Error("Nominatim geocoding failed (" + geoRes.status + ")");
+  var geo = await geoRes.json();
+  if (!geo || geo.length === 0) throw new Error("Could not find '" + city + ", " + state + "' on OpenStreetMap");
+  var lat = geo[0].lat;
+  var lon = geo[0].lon;
+
+  // 2. Overpass query: plumbers within 25km of the city centre
+  var query =
+    "[out:json][timeout:40];" +
+    "(" +
+    'nwr["craft"="plumber"](around:25000,' + lat + "," + lon + ");" +
+    'nwr["shop"="plumber"](around:25000,' + lat + "," + lon + ");" +
+    'nwr["trade"="plumbing"](around:25000,' + lat + "," + lon + ");" +
+    ");" +
+    "out center tags;";
+
+  var opRes = await fetch("https://overpass-api.de/api/interpreter", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "User-Agent": "ZeroMissCall-Sales/1.0 (contact: ian@zeromisscall.com)",
+    },
+    body: "data=" + encodeURIComponent(query),
+  });
+  if (!opRes.ok) throw new Error("Overpass query failed (" + opRes.status + ") - try again in a minute, the free server rate-limits");
+  var data = await opRes.json();
+
+  // 3. Normalize results
+  var results = [];
+  var elements = data.elements || [];
+  for (var i = 0; i < elements.length; i++) {
+    var tags = elements[i].tags || {};
+    var name = tags.name;
+    if (!name) continue;
+    var rawPhone = tags.phone || tags["contact:phone"] || "";
+    if (rawPhone.indexOf(";") !== -1) rawPhone = rawPhone.split(";")[0];
+    results.push({
+      businessName: name,
+      phone:        rawPhone.trim(),
+      website:      tags.website || tags["contact:website"] || null,
+      email:        tags.email || tags["contact:email"] || null,
+      city:         tags["addr:city"] || city,
+      zip:          tags["addr:postcode"] || null,
+    });
+  }
+  return results;
+}
+
+// ─────────────────────────────────────────────
 // REGISTER SALES ROUTES
-// Call this from server.js after app is created
 // ─────────────────────────────────────────────
 function registerSalesRoutes(app, db) {
 
@@ -598,7 +821,6 @@ function registerSalesRoutes(app, db) {
   });
 
   // ── SALES DASHBOARD PAGE ──────────────────────────────────
-  // GET /admin/sales?secret=...
   app.get("/admin/sales", async (req, res) => {
     if (req.query.secret !== process.env.ADMIN_SECRET) {
       return res.status(401).send("Unauthorized");
@@ -608,21 +830,215 @@ function registerSalesRoutes(app, db) {
         .find({})
         .sort({ createdAt: -1 })
         .toArray();
+      let imports = [];
+      try {
+        imports = await db.collection("lead_imports")
+          .find({})
+          .sort({ at: -1 })
+          .limit(5)
+          .toArray();
+      } catch (impErr) {
+        console.error("Could not load imports:", impErr.message);
+      }
       res.setHeader("Content-Type", "text/html");
       res.setHeader("Cache-Control", "no-cache");
-      res.send(buildSalesDashboardHtml(leads));
+      res.send(buildSalesDashboardHtml(leads, imports));
     } catch (err) {
       res.status(500).send("Error: " + err.message);
+    }
+  });
+
+  // ── IMPORT FROM CSV ───────────────────────────────────────
+  // POST /admin/sales/import/csv
+  // Body: { csv*, label?, defaultState? }
+  app.post("/admin/sales/import/csv", requireAdminAuth, async (req, res) => {
+    try {
+      const csv = req.body.csv;
+      if (!csv || !String(csv).trim()) {
+        return res.status(400).json({ error: "Validation failed", message: "csv text is required" });
+      }
+
+      const lines = String(csv).split(/\r?\n/).filter(function(l) { return l.trim().length > 0; });
+      if (lines.length < 2) {
+        return res.status(400).json({ error: "Validation failed", message: "CSV needs a header row plus at least one data row" });
+      }
+      if (lines.length - 1 > MAX_CSV_ROWS) {
+        return res.status(400).json({ error: "Too large", message: "Max " + MAX_CSV_ROWS + " rows per import - split the file" });
+      }
+
+      const headers = parseCsvLine(lines[0]);
+      const map = mapHeaders(headers);
+      if (map.businessName === undefined || map.phone === undefined) {
+        return res.status(400).json({
+          error: "Headers not recognised",
+          message: "Could not find a business-name and phone column. Headers seen: " + headers.join(", ") +
+            ". Rename columns to something like 'Business Name' and 'Phone' and retry.",
+        });
+      }
+
+      const defaultState = req.body.defaultState ? String(req.body.defaultState).trim().toUpperCase() : "";
+
+      // Parse rows
+      const candidates = [];
+      let invalid = 0;
+      const seenPhones = {};
+      for (let i = 1; i < lines.length; i++) {
+        const cells = parseCsvLine(lines[i]);
+        const get = function(field) {
+          return map[field] !== undefined && cells[map[field]] !== undefined ? cells[map[field]] : "";
+        };
+        const businessName = get("businessName");
+        const phone = normalizePhone(get("phone"));
+        if (!businessName || !phone) { invalid++; continue; }
+        if (seenPhones[phone]) { invalid++; continue; } // dupe within file
+        seenPhones[phone] = true;
+        candidates.push(newLeadDoc({
+          businessName: businessName,
+          phone:        phone,
+          email:        get("email") || null,
+          ownerName:    get("ownerName") || null,
+          website:      get("website") || null,
+          city:         get("city") || null,
+          state:        get("state") || defaultState || null,
+          zip:          get("zip") || null,
+        }, "csv"));
+      }
+
+      if (candidates.length === 0) {
+        return res.status(400).json({
+          error: "Nothing to import",
+          message: "0 usable rows - every row was missing a business name or valid 10-digit phone (" + invalid + " skipped)",
+        });
+      }
+
+      // Dedupe against existing leads
+      const phones = candidates.map(function(c) { return c.phone; });
+      const existing = await db.collection("leads")
+        .find({ phone: { $in: phones } })
+        .project({ phone: 1 })
+        .toArray();
+      const existingSet = {};
+      existing.forEach(function(e) { existingSet[e.phone] = true; });
+      const fresh = candidates.filter(function(c) { return !existingSet[c.phone]; });
+      const duplicates = candidates.length - fresh.length;
+
+      let inserted = 0;
+      if (fresh.length > 0) {
+        const result = await db.collection("leads").insertMany(fresh, { ordered: false });
+        inserted = result.insertedCount;
+      }
+
+      const label = req.body.label && String(req.body.label).trim() ? String(req.body.label).trim() : "CSV import";
+      await db.collection("lead_imports").insertOne({
+        type: "csv",
+        label: label,
+        inserted: inserted,
+        duplicates: duplicates,
+        invalid: invalid,
+        at: new Date(),
+      }).catch(function(e) { console.error("Import log failed:", e.message); });
+
+      console.log("CSV import (" + label + "): " + inserted + " added, " + duplicates + " dupes, " + invalid + " invalid");
+
+      res.json({
+        success: true,
+        inserted: inserted,
+        duplicates: duplicates,
+        invalid: invalid,
+        message: inserted + " leads imported (" + duplicates + " already existed, " + invalid + " rows skipped)",
+      });
+    } catch (err) {
+      console.error("CSV import error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── IMPORT FROM OPENSTREETMAP ─────────────────────────────
+  // POST /admin/sales/import/osm
+  // Body: { city*, state* }
+  // Free: Nominatim geocode + Overpass query, 25km radius.
+  // Only results with a phone number are imported.
+  app.post("/admin/sales/import/osm", requireAdminAuth, async (req, res) => {
+    try {
+      const city = req.body.city ? String(req.body.city).trim() : "";
+      const state = req.body.state ? String(req.body.state).trim().toUpperCase() : "";
+      if (!city || !state || !STATE_TZ[state]) {
+        return res.status(400).json({ error: "Validation failed", message: "city and a valid 2-letter state are required" });
+      }
+
+      const found = await fetchOsmPlumbers(city, state);
+
+      // Keep only results with a usable phone, dedupe within batch
+      const candidates = [];
+      let noPhone = 0;
+      const seenPhones = {};
+      for (let i = 0; i < found.length; i++) {
+        const f = found[i];
+        const phone = normalizePhone(f.phone);
+        if (!phone) { noPhone++; continue; }
+        if (seenPhones[phone]) continue;
+        seenPhones[phone] = true;
+        candidates.push(newLeadDoc({
+          businessName: f.businessName,
+          phone:        phone,
+          email:        f.email,
+          website:      f.website,
+          city:         f.city,
+          state:        state,
+          zip:          f.zip,
+        }, "osm"));
+      }
+
+      // Dedupe against existing leads
+      let inserted = 0;
+      let duplicates = 0;
+      if (candidates.length > 0) {
+        const phones = candidates.map(function(c) { return c.phone; });
+        const existing = await db.collection("leads")
+          .find({ phone: { $in: phones } })
+          .project({ phone: 1 })
+          .toArray();
+        const existingSet = {};
+        existing.forEach(function(e) { existingSet[e.phone] = true; });
+        const fresh = candidates.filter(function(c) { return !existingSet[c.phone]; });
+        duplicates = candidates.length - fresh.length;
+        if (fresh.length > 0) {
+          const result = await db.collection("leads").insertMany(fresh, { ordered: false });
+          inserted = result.insertedCount;
+        }
+      }
+
+      const label = "OSM: " + city + ", " + state;
+      await db.collection("lead_imports").insertOne({
+        type: "osm",
+        label: label,
+        found: found.length,
+        inserted: inserted,
+        duplicates: duplicates,
+        noPhone: noPhone,
+        at: new Date(),
+      }).catch(function(e) { console.error("Import log failed:", e.message); });
+
+      console.log("OSM import (" + label + "): " + found.length + " found, " + inserted + " added, " + noPhone + " without phone");
+
+      res.json({
+        success: true,
+        found: found.length,
+        inserted: inserted,
+        duplicates: duplicates,
+        noPhone: noPhone,
+        message: found.length + " plumbers found on OSM near " + city + " - " + inserted + " imported (" +
+          duplicates + " already existed, " + noPhone + " had no phone number)",
+      });
+    } catch (err) {
+      console.error("OSM import error:", err.message);
+      res.status(500).json({ error: err.message, message: err.message });
     }
   });
 
   // ── LOG A CALL (one-tap) ──────────────────────────────────
   // POST /admin/sales/leads/:id/log
   // Body: { outcome*, note?, email?, name? }
-  // outcome: no_answer | voicemail | spoke | not_interested | interested
-  //
-  // interested + an email on file (or in body) → sends the
-  // invitation email via email2.js and moves stage to "invited"
   app.post("/admin/sales/leads/:id/log", requireAdminAuth, async (req, res) => {
     try {
       let leadId;
@@ -661,7 +1077,6 @@ function registerSalesRoutes(app, db) {
         pushOps.notes = { at: now, text: note };
       }
 
-      // Optional contact details that arrived with the call
       if (req.body.email && String(req.body.email).includes("@")) {
         setOps.email = String(req.body.email).trim();
       }
@@ -686,7 +1101,6 @@ function registerSalesRoutes(app, db) {
             if (!pushOps.notes) {
               pushOps.notes = { at: now, text: "Invitation email sent to " + inviteEmail };
             }
-            // Log in the shared invitations collection (same as admin dashboard invites)
             try {
               await db.collection("invitations").insertOne({
                 email:  inviteEmail,
@@ -700,7 +1114,6 @@ function registerSalesRoutes(app, db) {
           } catch (emailErr) {
             console.error("Invitation email failed:", emailErr.message);
             inviteMessage = "Marked interested, but the invitation email FAILED: " + emailErr.message;
-            // stage stays "interested" so you can retry
           }
         } else {
           inviteMessage = "Marked interested. No email on file - add their email via Edit, then tap Interested again to send the invite.";
@@ -727,9 +1140,6 @@ function registerSalesRoutes(app, db) {
   });
 
   // ── ADD LEAD (manual) ─────────────────────────────────────
-  // POST /admin/sales/leads
-  // Body: { businessName*, phone*, ownerName, email, website,
-  //         city, state, note }
   app.post("/admin/sales/leads", requireAdminAuth, async (req, res) => {
     try {
       const check = validateLeadData(req.body);
@@ -737,7 +1147,6 @@ function registerSalesRoutes(app, db) {
         return res.status(400).json({ error: "Validation failed", details: check.errors });
       }
 
-      // Dedupe by normalized phone
       const existing = await db.collection("leads").findOne({ phone: check.phone });
       if (existing) {
         return res.status(409).json({
@@ -746,31 +1155,17 @@ function registerSalesRoutes(app, db) {
         });
       }
 
-      const now = new Date();
-      const state = req.body.state ? String(req.body.state).trim().toUpperCase() : "";
-      const lead = {
-        businessName: String(req.body.businessName).trim(),
+      const lead = newLeadDoc({
+        businessName: req.body.businessName,
         phone:        check.phone,
-        email:        req.body.email ? String(req.body.email).trim() : null,
-        ownerName:    req.body.ownerName ? String(req.body.ownerName).trim() : null,
-        website:      req.body.website ? String(req.body.website).trim() : null,
-        city:         req.body.city ? String(req.body.city).trim() : null,
-        state:        state || null,
-        zip:          req.body.zip ? String(req.body.zip).trim() : null,
-        timezone:     timezoneForState(state),
-        source:       "manual",
-        stage:        "new",
-        doNotCall:    false,
-        notes:        [],
-        callbackAt:   null,
-        callAttempts: [],
-        createdAt:    now,
-        updatedAt:    now,
-      };
-
-      if (req.body.note && String(req.body.note).trim()) {
-        lead.notes.push({ at: now, text: String(req.body.note).trim() });
-      }
+        email:        req.body.email,
+        ownerName:    req.body.ownerName,
+        website:      req.body.website,
+        city:         req.body.city,
+        state:        req.body.state,
+        zip:          req.body.zip,
+        note:         req.body.note,
+      }, "manual");
 
       const result = await db.collection("leads").insertOne(lead);
       console.log("Lead added: " + lead.businessName + " (" + lead.phone + ")");
@@ -790,7 +1185,6 @@ function registerSalesRoutes(app, db) {
   // PUT /admin/sales/leads/:id
   // Body: any of { email, ownerName, website, city, state,
   //                doNotCall, note, callbackHours }
-  // callbackHours: number of hours from now (0 = clear callback)
   app.put("/admin/sales/leads/:id", requireAdminAuth, async (req, res) => {
     try {
       let leadId;
@@ -861,23 +1255,29 @@ module.exports = { registerSalesRoutes };
 // INTEGRATION INSTRUCTIONS
 // ─────────────────────────────────────────────────────────────
 //
-// Same as Step 1 - no server.js changes needed if Step 1 is
-// already wired in:
+// No server.js changes needed if Steps 1-2 are already wired in:
 //   const { registerSalesRoutes } = require("./sales");
 //   registerSalesRoutes(app, db);   // inside the MongoDB .then()
 //
-// REQUIRES: email2.js deployed in the same folder (the
-// Interested button uses email2.sendInvitationEmail).
+// REQUIRES: email2.js in the same folder, Node 18+ (Railway
+// default - needed for the built-in fetch used by the OSM import).
 //
-// TEST CHECKLIST:
-// 1. /admin/sales?secret=... - queue section appears above the table
-// 2. Add a test lead (your own email) - it shows in "Ready to Call"
-//    if it's 8am-6pm in its state's timezone
-// 3. Tap "No Answer" - attempt count goes to 1, stage = NO ANSWER,
-//    Dials Today goes to 1
-// 4. Tap "Callback", enter 1 - lead leaves the ready list and shows
-//    a callback time in the table
-// 5. Tap "Interested → Invite" - invitation email arrives, stage =
-//    INVITED, Invites Sent stat increments
+// TEST CHECKLIST (Step 3):
+// 1. Open "Import Leads" on /admin/sales - two import options appear
+// 2. OSM: try a big city first (e.g. Austin, TX) - small towns often
+//    have zero mapped plumbers. Expect "X found - Y imported";
+//    don't be surprised if Y is small, OSM phone coverage is patchy
+// 3. CSV: make a quick test file with headers
+//      Business Name,Phone,Owner,Email,City,State
+//      Test Plumbing,2145550001,Mike,test@example.com,Dallas,TX
+//    upload it, confirm "1 leads imported", lead appears as NEW
+// 4. Re-import the same CSV - confirm "0 imported, 1 already existed"
+// 5. Imported leads flow straight into the Ready to Call queue
+//    during their local calling window
+//
+// FREE CSV SOURCES TO TRY FIRST:
+// - Texas TDLR licensed plumber roster (downloadable file)
+// - Florida DBPR licensee search/export
+// - Outscraper / Scrap.io free-trial exports
 //
 // ─────────────────────────────────────────────────────────────
