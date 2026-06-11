@@ -11,10 +11,14 @@ var NAVY         = "#0b1928";
 var GREEN        = "#3ecf8e";
 
 // ─── WRAP (identical to email.js) ────────────────────────────────────────────
-function wrap(body, preview) {
+// footerNote is optional - defaults to the standard "active account" line.
+// The invitation email passes a custom line because recipients are prospects,
+// not customers. All existing emails call wrap(body, preview) and are unchanged.
+function wrap(body, preview, footerNote) {
   var pre = preview
     ? "<div style='display:none;max-height:0;overflow:hidden;font-size:1px;color:#f4f7fb;'>" + preview + "</div>"
     : "";
+  var footer = footerNote || "You are receiving this because you have an active ZeroMissCall account.";
   return (
     "<!DOCTYPE html>" +
     "<html lang='en'>" +
@@ -56,7 +60,7 @@ function wrap(body, preview) {
     "<a href='" + SITE + "' style='color:" + ORANGE + ";text-decoration:none;'>zeromisscall.com</a>" +
     "</p>" +
     "<p style='font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#4a6278;margin:0;line-height:1.6;'>" +
-    "You are receiving this because you have an active ZeroMissCall account.<br/>" +
+    footer + "<br/>" +
     "To update preferences, <a href='" + SITE + "/contact.html' style='color:#8ba4bb;'>contact us</a>." +
     "</p>" +
     "</td></tr>" +
@@ -303,6 +307,59 @@ function buildWinBackEmail(plumber, stats) {
   };
 }
 
+// ─── EMAIL 5: SALES INVITATION ───────────────────────────────────────────────
+// Sent manually from the admin dashboard after a sales call
+// Purpose: get a warm prospect to sign up while the call is fresh
+// name is OPTIONAL - falls back to a generic greeting/subject if blank
+// ─────────────────────────────────────────────────────────────────────────────
+function buildInvitationEmail(name) {
+  var hasName  = name && String(name).trim().length > 0;
+  var safeName = hasName ? String(name).trim() : "";
+  var signup   = SITE + "/signup.html";
+
+  var body =
+    section(
+      greeting(hasName ? safeName : "there") +
+      "<p style='font-family:Arial,Helvetica,sans-serif;font-size:20px;font-weight:700;color:#0b1928;margin:0 0 16px 0;'>Great speaking with you today</p>" +
+      bodyText("As promised, here is your link to get started with ZeroMissCall. Your 14-day free trial is ready - no card needed to start, and setup takes about 2 minutes.") +
+      bodyText("From the moment you are set up, every call you miss gets an instant text-back. Our AI chats with the customer, finds out what job they need, and sends you the lead - so the work stays with you instead of going to the next plumber on Google.")
+    ) +
+    "<table width='100%' cellpadding='0' cellspacing='0' border='0'><tr><td class='pad' style='padding:20px 40px;'>" +
+    infoBox(ORANGE, "What happens when you sign up",
+      "1. Fill in your business details (takes 2 minutes)<br/>" +
+      "2. We send you a quick setup guide for call forwarding<br/>" +
+      "3. Your missed calls start getting answered automatically<br/>" +
+      "4. You get every lead by text and in your dashboard"
+    ) +
+    infoBox("#0b1928", "The numbers",
+      "<b>14-day free trial</b> - try it on real calls first<br/>" +
+      "<b>$69/month</b> after the trial<br/>" +
+      "<b>No contract</b> - cancel anytime<br/>" +
+      "One recovered job usually pays for months of service"
+    ) +
+    "</td></tr></table>" +
+    divider() +
+    "<table width='100%' cellpadding='0' cellspacing='0' border='0'><tr><td class='pad' align='center' style='padding:28px 40px;'>" +
+    bigCta(signup, "Start My Free Trial") +
+    "<p style='font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#999999;margin:16px 0 0 0;line-height:1.5;'>" +
+    "Any questions at all? Just reply to this email - it comes straight to Ian." +
+    "</p>" +
+    "</td></tr></table>";
+
+  var subject = hasName
+    ? "Your ZeroMissCall free trial is ready, " + safeName
+    : "Your ZeroMissCall free trial is ready";
+
+  return {
+    subject: subject,
+    html: wrap(
+      body,
+      "Great speaking with you today. Here is your link to start your 14-day free ZeroMissCall trial.",
+      "You are receiving this because you spoke with Ian from ZeroMissCall."
+    ),
+  };
+}
+
 // ─── SEND FUNCTIONS ──────────────────────────────────────────────────────────
 async function sendDay3Checkin(plumber) {
   if (!plumber.email) return;
@@ -336,6 +393,14 @@ async function sendWinBackEmail(plumber, stats) {
   return r;
 }
 
+async function sendInvitationEmail(toEmail, name) {
+  if (!toEmail) return;
+  var t = buildInvitationEmail(name);
+  var r = await resend.emails.send({ from: FROM_IAN, to: toEmail, subject: t.subject, html: t.html });
+  console.log("Invitation email sent to " + toEmail + (name ? " (" + name + ")" : ""));
+  return r;
+}
+
 // ─── TEST SEND - fires all 4 to one address ──────────────────────────────────
 async function sendTestEmails2(toEmail) {
   var p = {
@@ -363,10 +428,19 @@ async function sendTestEmails2(toEmail) {
   console.log("All 4 email2 test emails sent to " + toEmail);
 }
 
+// ─── TEST SEND - invitation only (named + unnamed versions) ──────────────────
+async function sendTestInvitation(toEmail) {
+  await sendInvitationEmail(toEmail, "Mike");
+  await sendInvitationEmail(toEmail, "");
+  console.log("Both invitation test emails (named + generic) sent to " + toEmail);
+}
+
 module.exports = {
   sendDay3Checkin,
   sendFirstLeadEmail,
   sendPaymentFailedEmail,
   sendWinBackEmail,
+  sendInvitationEmail,
   sendTestEmails2,
+  sendTestInvitation,
 };
