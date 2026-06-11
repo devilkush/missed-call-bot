@@ -34,6 +34,12 @@ const email2 = require("./email2");
 var MY_NUMBER  = process.env.OWNER_PHONE  || "+353852688039";
 var ZMC_NUMBER = process.env.TWILIO_NUMBER || "+18885760762";
 
+// ── FAVICON ──────────────────────────────────
+// Paste your full base64 favicon string between the quotes below.
+// It's the long 'data:image/png;base64,iVBORw0KGgo...' string from
+// your previous admin.js <link rel='icon'> tag. One paste, done.
+var ZMC_FAVICON = "PASTE_YOUR_BASE64_FAVICON_STRING_HERE";
+
 function getTwilioClient() {
   return twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 }
@@ -334,6 +340,7 @@ function buildAdminDashboardHtml(plumbers, allStats, invitations) {
   return "<!DOCTYPE html><html lang='en'><head>" +
     "<meta charset='UTF-8'/><meta name='viewport' content='width=device-width,initial-scale=1.0'/>" +
     "<title>ZeroMissCall Admin</title>" +
+    "<link rel='icon' type='image/png' href='" + ZMC_FAVICON + "'/>" +
     "<link href='https://fonts.googleapis.com/css2?family=Nunito:wght@700;800;900&family=DM+Sans:wght@400;500&display=swap' rel='stylesheet'>" +
     "<style>:root{--navy:#0b1928;--orange:#E8791A;--green:#3ecf8e;--border:rgba(255,255,255,0.07);}*{box-sizing:border-box;margin:0;padding:0;}body{font-family:'DM Sans',sans-serif;background:#0b1928;color:#fff;min-height:100vh;-webkit-font-smoothing:antialiased;}.wrap{max-width:1100px;margin:0 auto;padding:0 20px 60px;}table{width:100%;border-collapse:collapse;}th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:#6b84a0;font-weight:600;padding:10px 16px;}tr:hover td{background:rgba(255,255,255,0.02);}input::placeholder{color:#5a7390;}@media(max-width:900px){.hide-mobile{display:none;}}</style>" +
     "</head><body>" +
