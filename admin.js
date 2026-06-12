@@ -164,6 +164,65 @@ function requireAdminAuth(req, res, next) {
 }
 
 // ─────────────────────────────────────────────
+// SALES LEAD MATCHING (Step 4 of sales dashboard)
+// When a signup's email matches a lead in the "leads"
+// collection, the lead auto-advances to TRIAL - so the
+// sales dashboard's invite → trial conversion tracks
+// itself with zero manual work.
+// ─────────────────────────────────────────────
+function escapeRegex(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function matchLeadToSignup(db, email, businessName) {
+  if (!email) return;
+  try {
+    const lead = await db.collection("leads").findOne({
+      email: { $regex: "^" + escapeRegex(String(email).trim()) + "$", $options: "i" },
+      stage: { $nin: ["trial", "customer"] },
+    });
+    if (!lead) return;
+    await db.collection("leads").updateOne(
+      { _id: lead._id },
+      {
+        $set: { stage: "trial", updatedAt: new Date() },
+        $push: { notes: { at: new Date(), text: "Signed up for trial" + (businessName ? " as " + businessName : "") } },
+      }
+    );
+    console.log("Sales lead converted to TRIAL: " + lead.businessName + " (" + email + ")");
+  } catch (err) {
+    // Never let lead matching break a signup
+    console.error("Lead match error:", err.message);
+  }
+}
+
+// Call this from your Stripe webhook when a subscription goes
+// active (the moment subscriptionStatus flips to "active") to
+// move the matching sales lead to CUSTOMER:
+//   const { markLeadCustomerByEmail } = require("./admin");
+//   await markLeadCustomerByEmail(db, plumber.email);
+async function markLeadCustomerByEmail(db, email) {
+  if (!email) return;
+  try {
+    const lead = await db.collection("leads").findOne({
+      email: { $regex: "^" + escapeRegex(String(email).trim()) + "$", $options: "i" },
+      stage: { $ne: "customer" },
+    });
+    if (!lead) return;
+    await db.collection("leads").updateOne(
+      { _id: lead._id },
+      {
+        $set: { stage: "customer", updatedAt: new Date() },
+        $push: { notes: { at: new Date(), text: "Became a paying customer" } },
+      }
+    );
+    console.log("Sales lead converted to CUSTOMER: " + lead.businessName + " (" + email + ")");
+  } catch (err) {
+    console.error("Lead customer-match error:", err.message);
+  }
+}
+
+// ─────────────────────────────────────────────
 // VALIDATE PLUMBER DATA
 // ─────────────────────────────────────────────
 function validatePlumberData(data, requireAll = true) {
@@ -504,6 +563,7 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
 
       await sendWelcomeSMS(plumber);
       await notifyOwnerNewSignup(plumber);
+      await matchLeadToSignup(db, plumber.email, plumber.businessName);
       console.log("Plumber created: " + plumber.businessName + " (" + plumber.twilioNumber + ")");
 
       res.status(201).json({
@@ -701,6 +761,7 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
 
       await sendWelcomeSMS(plumber);
       await notifyOwnerNewSignup(plumber);
+      await matchLeadToSignup(db, plumber.email, plumber.businessName);
       console.log("New trial signup: " + plumber.businessName + " (" + plumber.email + ")");
 
       res.status(201).json({
@@ -917,7 +978,7 @@ function sanitizePlumber(plumber) {
   };
 }
 
-module.exports = { registerAdminRoutes, sendDailySummaryEmail, notifyOwnerLeadCaptured, notifyOwnerError };
+module.exports = { registerAdminRoutes, sendDailySummaryEmail, notifyOwnerLeadCaptured, notifyOwnerError, markLeadCustomerByEmail };
 
 // ─────────────────────────────────────────────────────────────
 // INTEGRATION INSTRUCTIONS
@@ -961,5 +1022,16 @@ module.exports = { registerAdminRoutes, sendDailySummaryEmail, notifyOwnerLeadCa
 // POST /admin/invite?secret=zeromisscall123
 // Content-Type: application/json
 // Body: { "email": "prospect@example.com", "name": "Mike" }
+//
+// STEP 7 — Sales lead tracking (Step 4 of sales dashboard):
+// Signups via /onboard or /admin/plumbers automatically flip a
+// matching sales lead (by email) to TRIAL. Nothing to do.
+//
+// To also track TRIAL → CUSTOMER: in your Stripe webhook handler,
+// at the point where you set subscriptionStatus to "active"
+// (e.g. checkout.session.completed / invoice paid), add:
+//   const { markLeadCustomerByEmail } = require("./admin");
+//   await markLeadCustomerByEmail(db, plumber.email);
+// Paste me your billing/webhook file and I'll place it exactly.
 //
 // ─────────────────────────────────────────────────────────────
