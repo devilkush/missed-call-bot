@@ -421,7 +421,21 @@ async function ensureIndexes(db) {
   if (!db) return;
 
   // plumbers
-  await db.collection("plumbers").createIndex({ twilioNumber: 1 }, { unique: true });
+  // twilioNumber is intentionally NON-unique during the shared-number phase:
+  // the first few trial customers all share +18885760762 (per-customer numbers
+  // come later). If an older UNIQUE index exists, drop it first so we can
+  // recreate it non-unique without an IndexOptionsConflict on startup.
+  try {
+    const plumberIdx = await db.collection("plumbers").indexes();
+    const twilioIdx = plumberIdx.find((i) => i.name === "twilioNumber_1");
+    if (twilioIdx && twilioIdx.unique) {
+      await db.collection("plumbers").dropIndex("twilioNumber_1");
+      console.log("🔧 Dropped old UNIQUE twilioNumber index (shared-number phase)");
+    }
+  } catch (e) {
+    console.error("⚠️ twilioNumber index migration check failed:", e.message);
+  }
+  await db.collection("plumbers").createIndex({ twilioNumber: 1 });
   await db.collection("plumbers").createIndex({ subscriptionStatus: 1 });
   await db.collection("plumbers").createIndex({ trialEndDate: 1 });
   await db.collection("plumbers").createIndex({ dashboardToken: 1 });
