@@ -23,6 +23,7 @@
 // ─────────────────────────────────────────────────────────────
 
 const Stripe = require("stripe");
+const emailService2 = require("./email2");
 
 function registerBillingRoutes(app, db, db_helpers, emailService) {
 
@@ -236,23 +237,13 @@ function registerBillingRoutes(app, db, db_helpers, emailService) {
 
           // ── Invoice payment failed → flag account ──────────
           case "invoice.payment_failed": {
-        // Send payment failed email
-        try {
-          const failedCustomerId = event.data.object.customer;
-          const failedPlumber = await db.collection("plumbers").findOne({ stripeCustomerId: failedCustomerId });
-          if (failedPlumber) {
-            await emailService2.sendPaymentFailedEmail(failedPlumber);
-          }
-        } catch (e) {
-          console.error("Payment failed email error:", e.message);
-        }
             const invoice = event.data.object;
             const plumber = await db.collection("plumbers").findOne({
               stripeCustomerId: invoice.customer,
             });
             if (plumber) {
               console.warn(`⚠️  Payment failed: ${plumber.businessName} (${plumber.email})`);
-              await sendPaymentFailedEmail(plumber, stripe, emailService);
+              await sendPaymentFailedEmail(plumber);
             }
             break;
           }
@@ -340,7 +331,6 @@ function registerBillingRoutes(app, db, db_helpers, emailService) {
 async function sendActivationEmail(plumber, stripe) {
   if (!process.env.RESEND_API_KEY) return;
   const { Resend } = require("resend");
-const emailService2 = require("./email2");
   const resend = new Resend(process.env.RESEND_API_KEY);
 
   await resend.emails.send({
@@ -396,7 +386,6 @@ const emailService2 = require("./email2");
 async function sendPaymentFailedEmail(plumber) {
   if (!process.env.RESEND_API_KEY || !plumber.email) return;
   const { Resend } = require("resend");
-const emailService2 = require("./email2");
   const resend = new Resend(process.env.RESEND_API_KEY);
 
   await resend.emails.send({
