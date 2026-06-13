@@ -725,29 +725,75 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
   // POST /onboard
   // Public endpoint — used by website signup form
   // Creates plumber with trial status and sends welcome email
+  // NOTE: the public signup form does NOT send twilioNumber — it is
+  // auto-assigned here (shared trial number). Per-customer numbers come later.
+  const DEFAULT_TRIAL_NUMBER = "+18885760762";
+
   app.post("/onboard", async (req, res) => {
     try {
-      const errors = validatePlumberData(req.body, true);
-      if (errors.length > 0) {
-        return res.status(400).json({ error: "Validation failed", details: errors });
+      const body = req.body || {};
+
+      // ── Normalise inputs ────────────────────────────────────
+      const businessName = (body.businessName || "").trim();
+      const ownerName    = (body.ownerName || "").trim();
+      const email        = (body.email || "").trim().toLowerCase();
+      const state        = (body.state || "").trim();
+
+      // Normalise phone to E.164 (US default). Form sends raw digits.
+      let ownerPhone = (body.ownerPhone || "").trim();
+      const phoneDigits = ownerPhone.replace(/[^\d]/g, "");
+      if (ownerPhone.startsWith("+")) {
+        ownerPhone = "+" + phoneDigits;
+      } else if (phoneDigits.length === 10) {
+        ownerPhone = "+1" + phoneDigits;               // US 10-digit
+      } else if (phoneDigits.length === 11 && phoneDigits.startsWith("1")) {
+        ownerPhone = "+" + phoneDigits;                // US 11-digit (1XXXXXXXXXX)
+      } else {
+        ownerPhone = phoneDigits ? "+" + phoneDigits : "";
       }
 
-      // Check if already exists
-      const existing = await db.collection("plumbers").findOne({
-        $or: [
-          { twilioNumber: req.body.twilioNumber },
-          { email: req.body.email },
-        ],
-      });
+      // ── Field-by-field validation with clear, user-facing messages ──
+      if (!businessName) {
+        return res.status(400).json({ error: "Please enter your business name.", field: "businessName" });
+      }
+      if (!ownerName) {
+        return res.status(400).json({ error: "Please enter your name.", field: "ownerName" });
+      }
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ error: "Please enter a valid email address.", field: "email" });
+      }
+      if (!ownerPhone || ownerPhone.replace(/[^\d]/g, "").length < 10) {
+        return res.status(400).json({ error: "Please enter a valid business phone number (e.g. 214-555-0123).", field: "ownerPhone" });
+      }
 
-      if (existing) {
+      // ── Duplicate checks — specific, visible messages ───────
+      const existingEmail = await db.collection("plumbers").findOne({ email: email });
+      if (existingEmail) {
         return res.status(409).json({
-          error: "Account already exists",
-          message: "An account with this phone number or email already exists. Please contact support.",
+          error: "That email is already registered. Try logging in, or use a different email.",
+          field: "email",
+        });
+      }
+      const existingPhone = await db.collection("plumbers").findOne({ ownerPhone: ownerPhone });
+      if (existingPhone) {
+        return res.status(409).json({
+          error: "That phone number is already registered. If this is you, email hello@zeromisscall.com.",
+          field: "ownerPhone",
         });
       }
 
-      const plumber = await db_helpers.createPlumber(db, req.body);
+      // ── Build the plumber record (twilioNumber auto-assigned) ──
+      const plumberData = {
+        twilioNumber:  DEFAULT_TRIAL_NUMBER,
+        businessName:  businessName,
+        ownerName:     ownerName,
+        ownerPhone:    ownerPhone,
+        email:         email,
+        state:         state,
+        plan:          "trial",
+      };
+
+      const plumber = await db_helpers.createPlumber(db, plumberData);
 
       // Send welcome email
       try {
@@ -766,13 +812,34 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
 
       res.status(201).json({
         success: true,
+        email: plumber.email,
         message: "Trial account created successfully",
         trialEndsAt: plumber.trialEndDate,
         dashboardUrl: `https://missed-call-bot-production.up.railway.app/dashboard/${plumber.dashboardToken}`,
       });
     } catch (err) {
+      // Friendly translation of MongoDB duplicate-key errors (code 11000)
+      if (err && err.code === 11000) {
+        const dupKey = err.keyPattern ? Object.keys(err.keyPattern)[0] : "";
+        if (dupKey === "email") {
+          return res.status(409).json({ error: "That email is already registered.", field: "email" });
+        }
+        if (dupKey === "ownerPhone") {
+          return res.status(409).json({ error: "That phone number is already registered.", field: "ownerPhone" });
+        }
+        if (dupKey === "twilioNumber") {
+          // Shared trial number is unique-indexed and already in use by another trial.
+          // See note in db.js ensureIndexes — this index must be made non-unique
+          // before a second trial can be created on the shared number.
+          console.error("⚠️ Onboard blocked: shared twilioNumber unique-index collision.");
+          return res.status(503).json({
+            error: "We can't auto-create your account right now. Email hello@zeromisscall.com and we'll set you up in minutes.",
+          });
+        }
+        return res.status(409).json({ error: "An account with these details already exists." });
+      }
       console.error("❌ Onboard error:", err.message);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Something went wrong creating your account. Please try again, or email hello@zeromisscall.com." });
     }
   });
 
