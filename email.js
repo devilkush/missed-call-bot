@@ -374,6 +374,18 @@ function buildWelcomeEmail(plumber, trialEnd) {
     divider() +
     "</td></tr></table>" +
     "<table width='100%' cellpadding='0' cellspacing='0' border='0'><tr><td class='pad' style='padding:24px 40px;'>" +
+    infoBox(ORANGE, "&#9889; Step 1: Turn on call forwarding (2 minutes &mdash; do this first)",
+      "This is the one step that makes everything work. You need to forward the calls you <strong>miss</strong> to your ZeroMissCall number, so the AI can text those callers back for you.<br/><br/>" +
+      "<strong>Your ZeroMissCall number: +1 888 576 0762</strong><br/><br/>" +
+      "Open your phone's keypad, type the code for your carrier exactly as shown (no spaces), then press call:<br/><br/>" +
+      "<strong>Verizon:</strong> &nbsp;<span style=\"font-family:Consolas,Menlo,Courier,monospace;background:#fff3e6;color:#0b1928;padding:3px 7px;border-radius:4px;font-weight:700;\">*71 8885760762</span><br/><br/>" +
+      "<strong>AT&amp;T or T-Mobile:</strong> &nbsp;<span style=\"font-family:Consolas,Menlo,Courier,monospace;background:#fff3e6;color:#0b1928;padding:3px 7px;border-radius:4px;font-weight:700;\">*61*8885760762#</span><br/><br/>" +
+      "<strong>Not sure / other carrier:</strong> &nbsp;<span style=\"font-family:Consolas,Menlo,Courier,monospace;background:#fff3e6;color:#0b1928;padding:3px 7px;border-radius:4px;font-weight:700;\">*61*8885760762#</span><br/><br/>" +
+      "You'll hear a short confirmation tone &mdash; that's it. Your phone still rings normally, and only the calls you <strong>don't answer</strong> get forwarded to the AI.<br/><br/>" +
+      "<strong>&#9888;&#65039; Don't use &lsquo;forward all calls&rsquo;</strong> (Verizon <strong>*72</strong>, AT&amp;T/T-Mobile <strong>*21*</strong>). Those send <em>every</em> call straight to the AI and your phone never rings. The iPhone toggle under Settings &gt; Phone &gt; Call Forwarding does the same thing &mdash; so skip it and use the code above instead.<br/><br/>" +
+      "<strong>&#9989; Test it now:</strong> from another phone, call your business number, let it ring out <em>without</em> answering, and you should get a ZeroMissCall text within a minute. If you do &mdash; you're live.<br/><br/>" +
+      "<span style=\"font-size:13px;color:#888888;\">To switch forwarding off later: Verizon dial <strong>*73</strong>; AT&amp;T/T-Mobile dial <strong>#61#</strong>.</span>"
+    ) +
     infoBox(GREEN, "Your personal dashboard",
       "Bookmark this link. It is how you view your conversations, captured leads, and account settings.",
       dash, "View My Dashboard", NAVY
