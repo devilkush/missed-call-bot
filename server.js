@@ -166,22 +166,67 @@ async function sendSMS(to, from, body) {
 // ─────────────────────────────────────────────
 app.post("/voice", async (req, res) => {
   const twilioNumber = req.body.To;
+  const callerNumber = req.body.From;
+  const callSid      = req.body.CallSid;
+
+  console.log(`📞 Forwarded (missed) call | From: ${callerNumber} | To: ${twilioNumber} | SID: ${callSid}`);
+
   const plumber = await db_helpers.getPlumberByTwilioNumber(db, twilioNumber);
   const businessName = plumber ? plumber.businessName : "us";
   const ownerName    = plumber ? plumber.ownerName    : "the team";
 
+  // ── 1. Respond to Twilio FIRST so the caller hears the greeting instantly ──
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const twiml = new VoiceResponse();
-
   twiml.say(
     { voice: "Polly.Joanna-Neural" },
     `Hey, thanks for calling ${businessName}! ${ownerName} is probably out on a job right now. ` +
       `We're sending you a text right now so we can get you sorted fast. Talk soon!`
   );
-
   twiml.hangup();
   res.type("text/xml");
   res.send(twiml.toString());
+
+  // ── 2. Then send the text-back (conditional forwarding = this call was already missed) ──
+  // A call reaching this number has rung the plumber and gone unanswered, so we always text back.
+  if (!plumber) {
+    console.warn(`⚠️  No plumber config found for: ${twilioNumber} - no text sent.`);
+    return;
+  }
+
+  if (callSid && isDuplicate(callSid)) {
+    console.log(`⏭️  Duplicate /voice hit for ${callSid} - skipping text.`);
+    return;
+  }
+
+  const openingMessage =
+    `Hey! Thanks for calling ${plumber.businessName} - sorry we missed you, ` +
+    `we're probably out on a job. I can help you right now over text. What do you need?`;
+
+  try {
+    const blocked = await optout.isBlockedFromSending(
+      db_helpers, db, twilioNumber, callerNumber
+    );
+    if (blocked) {
+      console.log(`🚫 Skipping opening text - ${callerNumber} has opted out.`);
+      return;
+    }
+
+    await sendSMS(callerNumber, twilioNumber, openingMessage);
+    await db_helpers.saveMessage(db, twilioNumber, callerNumber, "assistant", openingMessage);
+
+    if (plumber.ownerPhone) {
+      await sendSMS(
+        plumber.ownerPhone,
+        twilioNumber,
+        `📞 Missed call from ${callerNumber}. Auto-reply sent - conversation started.`
+      );
+    }
+
+    console.log(`✅ Opening text sent to ${callerNumber}`);
+  } catch (err) {
+    console.error("❌ Error sending opening message from /voice:", err.message);
+  }
 });
 
 // ─────────────────────────────────────────────
