@@ -729,6 +729,92 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
   // auto-assigned here (shared trial number). Per-customer numbers come later.
   const DEFAULT_TRIAL_NUMBER = "+18885760762";
 
+  // ── PER-CUSTOMER NUMBER PROVISIONING ─────────────────────────────────────
+  // Buys a local 10-digit number in the customer's area code, points its
+  // webhooks at our app, and (if configured) attaches it to the A2P Messaging
+  // Service so it can send SMS immediately. Returns the E.164 number on success.
+  // On ANY failure it returns null so the caller can fall back to the shared
+  // number — a Twilio hiccup must never block a signup.
+  //
+  // Requires env: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN.
+  // Optional env: TWILIO_MESSAGING_SERVICE_SID (the A2P campaign's MG... SID).
+  //   Until that is set, numbers are bought + webhook-wired but NOT attached to
+  //   the campaign (so SMS won't send yet) — fine for staging before A2P approval.
+  const APP_BASE_URL =
+    process.env.PUBLIC_BASE_URL ||
+    "https://missed-call-bot-production.up.railway.app";
+
+  async function provisionLocalNumber(areaCode) {
+    if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
+      console.warn("⚠️  Provisioning skipped: Twilio credentials not set.");
+      return null;
+    }
+    let client;
+    try {
+      client = require("twilio")(
+        process.env.TWILIO_ACCOUNT_SID,
+        process.env.TWILIO_AUTH_TOKEN
+      );
+    } catch (e) {
+      console.error("❌ Could not init Twilio client:", e.message);
+      return null;
+    }
+
+    // 1. Find an available local number — try the customer's area code first,
+    //    then fall back to any US local number with SMS + voice.
+    async function findNumber() {
+      const tries = [];
+      if (areaCode) tries.push({ areaCode: areaCode, smsEnabled: true, voiceEnabled: true, limit: 1 });
+      tries.push({ smsEnabled: true, voiceEnabled: true, limit: 1 }); // any US local
+      for (const opts of tries) {
+        try {
+          const list = await client.availablePhoneNumbers("US").local.list(opts);
+          if (list && list.length > 0) return list[0].phoneNumber;
+        } catch (e) {
+          console.warn("⚠️  Number search failed (" + JSON.stringify(opts) + "): " + e.message);
+        }
+      }
+      return null;
+    }
+
+    try {
+      const phoneNumber = await findNumber();
+      if (!phoneNumber) {
+        console.warn("⚠️  No available local numbers found.");
+        return null;
+      }
+
+      // 2. Buy it and wire webhooks to our app (voice = /voice, sms = /incoming-sms)
+      const bought = await client.incomingPhoneNumbers.create({
+        phoneNumber: phoneNumber,
+        voiceUrl:    APP_BASE_URL + "/voice",
+        voiceMethod: "POST",
+        smsUrl:      APP_BASE_URL + "/incoming-sms",
+        smsMethod:   "POST",
+        friendlyName: "ZeroMissCall trial " + phoneNumber,
+      });
+
+      // 3. Attach to the A2P Messaging Service so it can send (if configured)
+      const msgSvc = process.env.TWILIO_MESSAGING_SERVICE_SID;
+      if (msgSvc) {
+        try {
+          await client.messaging.v1.services(msgSvc)
+            .phoneNumbers.create({ phoneNumberSid: bought.sid });
+        } catch (e) {
+          console.warn("⚠️  Bought " + phoneNumber + " but Messaging Service attach failed: " + e.message);
+        }
+      } else {
+        console.warn("⚠️  TWILIO_MESSAGING_SERVICE_SID not set — " + phoneNumber + " bought but not attached to A2P campaign (SMS won't send yet).");
+      }
+
+      console.log("✅ Provisioned local number " + phoneNumber + " (sid " + bought.sid + ")");
+      return phoneNumber;
+    } catch (e) {
+      console.error("❌ Number provisioning failed:", e.message);
+      return null;
+    }
+  }
+
   app.post("/onboard", async (req, res) => {
     try {
       const body = req.body || {};
@@ -782,9 +868,20 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
         });
       }
 
-      // ── Build the plumber record (twilioNumber auto-assigned) ──
+      // ── Provision a dedicated local number for this customer ──
+      // Use the owner's own area code for local presence. If provisioning
+      // fails for any reason, fall back to the shared number so signup still
+      // completes — we log it so it can be assigned a number manually.
+      const areaCode = ownerPhone.replace(/[^\d]/g, "").replace(/^1/, "").substring(0, 3);
+      let assignedNumber = await provisionLocalNumber(areaCode);
+      if (!assignedNumber) {
+        assignedNumber = DEFAULT_TRIAL_NUMBER;
+        console.warn("⚠️  Falling back to shared number for " + email + " — assign a dedicated number manually.");
+      }
+
+      // ── Build the plumber record ──
       const plumberData = {
-        twilioNumber:  DEFAULT_TRIAL_NUMBER,
+        twilioNumber:  assignedNumber,
         businessName:  businessName,
         ownerName:     ownerName,
         ownerPhone:    ownerPhone,
