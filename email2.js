@@ -117,6 +117,40 @@ function muted(text) {
   return "<p style='font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#999999;line-height:1.6;margin:0;'>" + text + "</p>";
 }
 
+// ─── CALL-FORWARDING HELPERS (kept identical to email.js) ────────────────────
+// fwdDigits  -> bare 10-digit US number for star codes (e.g. 7135551234)
+// fwdDisplay -> friendly display (e.g. +1 713 555 1234)
+// Each customer has their own assigned number (plumber.twilioNumber).
+function fwdDigits(plumber) {
+  var raw = (plumber && plumber.twilioNumber) ? String(plumber.twilioNumber) : "";
+  var digits = raw.replace(/[^0-9]/g, "");
+  if (digits.length === 11 && digits.charAt(0) === "1") digits = digits.substring(1);
+  return digits;
+}
+function fwdDisplay(plumber) {
+  var d = fwdDigits(plumber);
+  if (d.length === 10) return "+1 " + d.substring(0, 3) + " " + d.substring(3, 6) + " " + d.substring(6);
+  return (plumber && plumber.twilioNumber) ? String(plumber.twilioNumber) : "";
+}
+// The full conditional-forwarding instructions, dynamic per customer.
+function forwardingInstructionsHtml(plumber) {
+  var num = fwdDigits(plumber);
+  var disp = fwdDisplay(plumber);
+  var codeStyle = "font-family:Consolas,Menlo,Courier,monospace;background:#fff3e6;color:#0b1928;padding:3px 7px;border-radius:4px;font-weight:700;";
+  return (
+    "This is the one step that makes everything work. You need to forward the calls you <strong>miss</strong> to your ZeroMissCall number, so the AI can text those callers back for you.<br/><br/>" +
+    "<strong>Your ZeroMissCall number: " + disp + "</strong><br/><br/>" +
+    "Open your phone's keypad, type the code for your carrier exactly as shown (no spaces), then press call:<br/><br/>" +
+    "<strong>Verizon:</strong> &nbsp;<span style=\"" + codeStyle + "\">*71 " + num + "</span><br/><br/>" +
+    "<strong>AT&amp;T or T-Mobile:</strong> &nbsp;<span style=\"" + codeStyle + "\">*61*" + num + "#</span><br/><br/>" +
+    "<strong>Not sure / other carrier:</strong> &nbsp;<span style=\"" + codeStyle + "\">*61*" + num + "#</span><br/><br/>" +
+    "You'll hear a short confirmation tone &mdash; that's it. Your phone still rings normally, and only the calls you <strong>don't answer</strong> get forwarded to the AI.<br/><br/>" +
+    "<strong>&#9888;&#65039; Don't use &lsquo;forward all calls&rsquo;</strong> (Verizon <strong>*72</strong>, AT&amp;T/T-Mobile <strong>*21*</strong>). Those send <em>every</em> call straight to the AI and your phone never rings. The iPhone toggle under Settings &gt; Phone &gt; Call Forwarding does the same thing &mdash; so skip it and use the code above instead.<br/><br/>" +
+    "<strong>&#9989; Test it:</strong> from another phone, call your business number, let it ring out <em>without</em> answering, and you should get a ZeroMissCall text within a minute. If you do &mdash; you're live.<br/><br/>" +
+    "<span style=\"font-size:13px;color:#888888;\">To switch forwarding off later: Verizon dial <strong>*73</strong>; AT&amp;T/T-Mobile dial <strong>#61#</strong>.</span>"
+  );
+}
+
 // ─── EMAIL 1: DAY 3 CHECK-IN ─────────────────────────────────────────────────
 // Sends on day 3 of trial if no calls have come in yet
 // Purpose: catch plumbers who signed up but never set up call forwarding
@@ -132,19 +166,8 @@ function buildDay3CheckinEmail(plumber) {
       bodyText("Call forwarding is the one step that makes everything work. It only takes 2 minutes.")
     ) +
     "<table width='100%' cellpadding='0' cellspacing='0' border='0'><tr><td class='pad' style='padding:20px 40px;'>" +
-    infoBox(ORANGE, "iPhone - Set up call forwarding",
-      "1. Open Settings<br/>" +
-      "2. Tap Phone<br/>" +
-      "3. Tap Call Forwarding<br/>" +
-      "4. Toggle ON<br/>" +
-      "5. Enter: <b>+1 888 576 0762</b>"
-    ) +
-    infoBox("#0b1928", "Android - Set up call forwarding",
-      "1. Open the Phone app<br/>" +
-      "2. Tap the three dots (menu)<br/>" +
-      "3. Tap Settings then Call Forwarding<br/>" +
-      "4. Tap When Unanswered<br/>" +
-      "5. Enter: <b>+1 888 576 0762</b>"
+    infoBox(ORANGE, "&#9889; Turn on call forwarding (2 minutes)",
+      forwardingInstructionsHtml(plumber)
     ) +
     "</td></tr></table>" +
     divider() +
