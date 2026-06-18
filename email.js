@@ -386,6 +386,29 @@ function buildMonthlyReportEmail(plumber, stats, monthName) {
   };
 }
 
+// ─── TEMPLATE C2: EMAIL VERIFICATION ─────────────────────────────────────────
+function buildVerificationEmail(plumber, verifyUrl) {
+  var body =
+    section(
+      "<p style='font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:700;color:#0b1928;margin:0 0 10px 0;'>One quick step, " + plumber.ownerName + "</p>" +
+      "<p style='font-family:Arial,Helvetica,sans-serif;font-size:15px;color:#444444;line-height:1.7;margin:0 0 24px 0;'>Thanks for signing up <strong>" + plumber.businessName + "</strong> for ZeroMissCall. Before we set up your number and start your free trial, we just need to confirm this is your email.</p>"
+    ) +
+    bigCta(verifyUrl, "Confirm my email &amp; activate") +
+    "<table width='100%' cellpadding='0' cellspacing='0' border='0'><tr><td class='pad' style='padding:8px 40px 24px;'>" +
+    infoBox(ORANGE, "What happens next",
+      "As soon as you confirm, we set up your dedicated number, start your 14-day free trial, and email you the 2-minute call-forwarding instructions. Nothing happens until you click the button above."
+    ) +
+    "<p style='font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#888888;line-height:1.6;margin:16px 0 0 0;'>If the button does not work, copy and paste this link into your browser:<br/>" +
+    "<a href='" + verifyUrl + "' style='color:" + ORANGE + ";word-break:break-all;'>" + verifyUrl + "</a></p>" +
+    "<p style='font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#888888;line-height:1.6;margin:16px 0 0 0;'>If you did not sign up for ZeroMissCall, just ignore this email - nothing will happen.</p>" +
+    "</td></tr></table>";
+
+  return {
+    subject: "Confirm your email to activate ZeroMissCall",
+    html: wrap(body),
+  };
+}
+
 // ─── TEMPLATE D: WELCOME ─────────────────────────────────────────────────────
 function buildWelcomeEmail(plumber, trialEnd) {
   var dash = RAILWAY + "/dashboard/" + plumber.dashboardToken;
@@ -455,6 +478,19 @@ async function sendWelcomeEmail(plumber) {
   return r;
 }
 
+async function sendVerificationEmail(plumber, verifyUrl) {
+  if (!plumber.email) return;
+  var t = buildVerificationEmail(plumber, verifyUrl);
+  var r = await resend.emails.send({
+    from: FROM_IAN,
+    to: plumber.email,
+    subject: t.subject,
+    html: t.html,
+  });
+  console.log("Verification email sent to " + plumber.email);
+  return r;
+}
+
 async function sendWeeklyDigest(plumber, stats) {
   if (!plumber.email) return;
   var t = buildWeeklyDigestEmail(plumber, stats);
@@ -507,6 +543,6 @@ async function sendTestEmails(toEmail) {
 }
 
 module.exports = {
-  sendWelcomeEmail, sendWeeklyDigest, sendTrialEndEmail, sendMonthlyReport, sendTestEmails,
-  buildWelcomeEmail, buildWeeklyDigestEmail, buildTrialEndEmail, buildMonthlyReportEmail,
+  sendVerificationEmail, sendWelcomeEmail, sendWeeklyDigest, sendTrialEndEmail, sendMonthlyReport, sendTestEmails,
+  buildVerificationEmail, buildWelcomeEmail, buildWeeklyDigestEmail, buildTrialEndEmail, buildMonthlyReportEmail,
 };
