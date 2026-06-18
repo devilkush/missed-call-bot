@@ -187,6 +187,8 @@ async function createPlumber(db, data) {
     // Onboarding
     dashboardToken:        crypto.randomBytes(24).toString("hex"),
     welcomeEmailSent:      false,
+    verified:              data.verified !== false,
+    verificationToken:     data.verificationToken || null,
 
     // Timestamps
     createdAt:             now,
