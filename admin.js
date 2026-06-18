@@ -743,6 +743,7 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
   const APP_BASE_URL =
     process.env.PUBLIC_BASE_URL ||
     "https://missed-call-bot-production.up.railway.app";
+  const SITE_URL = "https://zeromisscall.com";
 
   async function provisionLocalNumber(areaCode) {
     if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
@@ -868,51 +869,40 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
         });
       }
 
-      // ── Provision a dedicated local number for this customer ──
-      // Use the owner's own area code for local presence. If provisioning
-      // fails for any reason, fall back to the shared number so signup still
-      // completes — we log it so it can be assigned a number manually.
-      const areaCode = ownerPhone.replace(/[^\d]/g, "").replace(/^1/, "").substring(0, 3);
-      let assignedNumber = await provisionLocalNumber(areaCode);
-      if (!assignedNumber) {
-        assignedNumber = DEFAULT_TRIAL_NUMBER;
-        console.warn("⚠️  Falling back to shared number for " + email + " — assign a dedicated number manually.");
-      }
+      // ── Create the plumber as UNVERIFIED — no number bought yet ──
+      // We only provision a paid number after the person confirms their email
+      // (see GET /verify). This stops fake/spam signups from spending money.
+      const verificationToken = crypto.randomBytes(24).toString("hex");
 
-      // ── Build the plumber record ──
       const plumberData = {
-        twilioNumber:  assignedNumber,
-        businessName:  businessName,
-        ownerName:     ownerName,
-        ownerPhone:    ownerPhone,
-        email:         email,
-        state:         state,
-        plan:          "trial",
+        twilioNumber:      null,            // assigned at verification time
+        businessName:      businessName,
+        ownerName:         ownerName,
+        ownerPhone:        ownerPhone,
+        email:             email,
+        state:             state,
+        plan:              "trial",
+        verified:          false,
+        verificationToken: verificationToken,
       };
 
       const plumber = await db_helpers.createPlumber(db, plumberData);
 
-      // Send welcome email
+      // Send the verification email (this is the ONLY email at this stage)
+      const verifyUrl = APP_BASE_URL + "/verify?token=" + verificationToken;
       try {
-        await sendWelcomeEmail(plumber, emailService);
-        await db_helpers.updatePlumber(db, plumber.twilioNumber, {
-          welcomeEmailSent: true,
-        });
+        await emailService.sendVerificationEmail(plumber, verifyUrl);
       } catch (emailErr) {
-        console.error("⚠️ Welcome email failed:", emailErr.message);
+        console.error("⚠️ Verification email failed:", emailErr.message);
       }
 
-      await sendWelcomeSMS(plumber);
-      await notifyOwnerNewSignup(plumber);
-      await matchLeadToSignup(db, plumber.email, plumber.businessName);
-      console.log("New trial signup: " + plumber.businessName + " (" + plumber.email + ")");
+      console.log("New UNVERIFIED signup: " + plumber.businessName + " (" + plumber.email + ") - awaiting email confirmation");
 
       res.status(201).json({
         success: true,
         email: plumber.email,
-        message: "Trial account created successfully",
-        trialEndsAt: plumber.trialEndDate,
-        dashboardUrl: `https://missed-call-bot-production.up.railway.app/dashboard/${plumber.dashboardToken}`,
+        pendingVerification: true,
+        message: "Almost there! Check your email to confirm and activate your account.",
       });
     } catch (err) {
       // Friendly translation of MongoDB duplicate-key errors (code 11000)
@@ -937,6 +927,105 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
       }
       console.error("❌ Onboard error:", err.message);
       res.status(500).json({ error: "Something went wrong creating your account. Please try again, or email hello@zeromisscall.com." });
+    }
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // GET /verify?token=...
+  // Clicked from the verification email. This is where the real work happens:
+  // provision the customer's dedicated number, start their trial, send the
+  // welcome email. No paid number is ever bought until this point.
+  // ───────────────────────────────────────────────────────────────────────
+  function verifyPage(title, message, ctaUrl, ctaText) {
+    var btn = ctaUrl
+      ? "<a href=\"" + ctaUrl + "\" style=\"display:inline-block;margin-top:24px;background:#E8791A;color:#ffffff;text-decoration:none;font-weight:700;padding:14px 28px;border-radius:8px;font-family:Arial,Helvetica,sans-serif;\">" + ctaText + "</a>"
+      : "";
+    return "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
+      "<title>" + title + "</title></head>" +
+      "<body style=\"margin:0;background:#0b1928;font-family:Arial,Helvetica,sans-serif;\">" +
+      "<div style=\"max-width:520px;margin:60px auto;background:#ffffff;border-radius:14px;padding:40px;text-align:center;\">" +
+      "<h1 style=\"color:#0b1928;font-size:24px;margin:0 0 12px;\">" + title + "</h1>" +
+      "<p style=\"color:#444444;font-size:16px;line-height:1.6;margin:0;\">" + message + "</p>" +
+      btn + "</div></body></html>";
+  }
+
+  app.get("/verify", async (req, res) => {
+    const token = (req.query.token || "").trim();
+    if (!token) {
+      return res.status(400).type("html").send(
+        verifyPage("Invalid link", "This verification link is missing its token. Please use the button in your email.", SITE_URL, "Go to ZeroMissCall")
+      );
+    }
+
+    try {
+      const plumber = await db.collection("plumbers").findOne({ verificationToken: token });
+
+      if (!plumber) {
+        return res.status(404).type("html").send(
+          verifyPage("Link not found", "This verification link is invalid or has already been used. If you've already confirmed, you're all set. Otherwise, try signing up again.", SITE_URL, "Go to ZeroMissCall")
+        );
+      }
+
+      // Already verified — friendly no-op (e.g. they clicked the link twice)
+      if (plumber.verified) {
+        const dashUrl = APP_BASE_URL + "/dashboard/" + plumber.dashboardToken;
+        return res.type("html").send(
+          verifyPage("You're already set up", "Your email is confirmed and your account is active. Head to your dashboard to get going.", dashUrl, "Open my dashboard")
+        );
+      }
+
+      // ── Provision the dedicated local number now (first real spend) ──
+      const areaCode = (plumber.ownerPhone || "").replace(/[^\d]/g, "").replace(/^1/, "").substring(0, 3);
+      let assignedNumber = await provisionLocalNumber(areaCode);
+      if (!assignedNumber) {
+        assignedNumber = DEFAULT_TRIAL_NUMBER;
+        console.warn("⚠️  Falling back to shared number for " + plumber.email + " — assign a dedicated number manually.");
+      }
+
+      // ── Activate: set number, start a fresh 14-day trial, mark verified ──
+      const now = new Date();
+      const trialEnd = new Date(now);
+      trialEnd.setDate(trialEnd.getDate() + 14);
+
+      await db.collection("plumbers").updateOne(
+        { _id: plumber._id },
+        { $set: {
+            twilioNumber:      assignedNumber,
+            verified:          true,
+            verificationToken: null,        // single-use: consume it
+            subscriptionStatus:"trial",
+            trialStartDate:    now,
+            trialEndDate:      trialEnd,
+            updatedAt:         now,
+          } }
+      );
+
+      const activated = { ...plumber, twilioNumber: assignedNumber, verified: true, trialEndDate: trialEnd };
+
+      // ── Now send the welcome email + alerts (post-verification) ──
+      try {
+        await sendWelcomeEmail(activated, emailService);
+        await db.collection("plumbers").updateOne({ _id: plumber._id }, { $set: { welcomeEmailSent: true } });
+      } catch (e) {
+        console.error("⚠️ Welcome email failed:", e.message);
+      }
+      try { await sendWelcomeSMS(activated); } catch (e) { console.error("⚠️ Welcome SMS failed:", e.message); }
+      try { await notifyOwnerNewSignup(activated); } catch (e) { console.error("⚠️ Owner notify failed:", e.message); }
+      try { await matchLeadToSignup(db, activated.email, activated.businessName); } catch (e) {}
+
+      console.log("✅ VERIFIED & activated: " + activated.businessName + " (" + activated.email + ") on " + assignedNumber);
+
+      const dashUrl = APP_BASE_URL + "/dashboard/" + plumber.dashboardToken;
+      return res.type("html").send(
+        verifyPage("You're all set, " + plumber.ownerName + "!",
+          "Your email is confirmed and your free trial is now active. We've emailed you the 2-minute call-forwarding setup - do that and you're live.",
+          dashUrl, "Open my dashboard")
+      );
+    } catch (err) {
+      console.error("❌ Verify error:", err.message);
+      return res.status(500).type("html").send(
+        verifyPage("Something went wrong", "We couldn't confirm your email just now. Please try the link again, or email hello@zeromisscall.com and we'll sort it.", SITE_URL, "Go to ZeroMissCall")
+      );
     }
   });
 
