@@ -196,8 +196,40 @@ async function matchLeadToSignup(db, email, businessName) {
   }
 }
 
-// Call this from your Stripe webhook when a subscription goes
-// active (the moment subscriptionStatus flips to "active") to
+// ───────────────────────────────────────────────────────────────────────
+// createPendingSignup — shared by POST /onboard (public form) and the
+// sales dashboard "Sign Up On Call" button. Creates the plumber as
+// UNVERIFIED with no number, and sends the verification email. The paid
+// number is only provisioned later, in GET /verify, when they click the link.
+// deps = { db, db_helpers, emailService }
+// data = { businessName, ownerName, email, ownerPhone, state }
+// Returns { plumber, verifyUrl }.
+// ───────────────────────────────────────────────────────────────────────
+async function createPendingSignup(deps, data) {
+  const baseUrl = process.env.PUBLIC_BASE_URL || "https://missed-call-bot-production.up.railway.app";
+  const verificationToken = crypto.randomBytes(24).toString("hex");
+
+  const plumber = await deps.db_helpers.createPlumber(deps.db, {
+    twilioNumber:      null,            // assigned at verification time
+    businessName:      data.businessName,
+    ownerName:         data.ownerName,
+    ownerPhone:        data.ownerPhone,
+    email:             data.email,
+    state:             data.state || "",
+    plan:              "trial",
+    verified:          false,
+    verificationToken: verificationToken,
+  });
+
+  const verifyUrl = baseUrl + "/verify?token=" + verificationToken;
+  try {
+    await deps.emailService.sendVerificationEmail(plumber, verifyUrl);
+  } catch (emailErr) {
+    console.error("⚠️ Verification email failed:", emailErr.message);
+  }
+  return { plumber: plumber, verifyUrl: verifyUrl };
+}
+
 // move the matching sales lead to CUSTOMER:
 //   const { markLeadCustomerByEmail } = require("./admin");
 //   await markLeadCustomerByEmail(db, plumber.email);
@@ -872,29 +904,10 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
       // ── Create the plumber as UNVERIFIED — no number bought yet ──
       // We only provision a paid number after the person confirms their email
       // (see GET /verify). This stops fake/spam signups from spending money.
-      const verificationToken = crypto.randomBytes(24).toString("hex");
-
-      const plumberData = {
-        twilioNumber:      null,            // assigned at verification time
-        businessName:      businessName,
-        ownerName:         ownerName,
-        ownerPhone:        ownerPhone,
-        email:             email,
-        state:             state,
-        plan:              "trial",
-        verified:          false,
-        verificationToken: verificationToken,
-      };
-
-      const plumber = await db_helpers.createPlumber(db, plumberData);
-
-      // Send the verification email (this is the ONLY email at this stage)
-      const verifyUrl = APP_BASE_URL + "/verify?token=" + verificationToken;
-      try {
-        await emailService.sendVerificationEmail(plumber, verifyUrl);
-      } catch (emailErr) {
-        console.error("⚠️ Verification email failed:", emailErr.message);
-      }
+      const { plumber } = await createPendingSignup(
+        { db: db, db_helpers: db_helpers, emailService: emailService },
+        { businessName: businessName, ownerName: ownerName, email: email, ownerPhone: ownerPhone, state: state }
+      );
 
       console.log("New UNVERIFIED signup: " + plumber.businessName + " (" + plumber.email + ") - awaiting email confirmation");
 
@@ -1104,7 +1117,7 @@ function sanitizePlumber(plumber) {
   };
 }
 
-module.exports = { registerAdminRoutes, sendDailySummaryEmail, notifyOwnerLeadCaptured, notifyOwnerError, markLeadCustomerByEmail };
+module.exports = { registerAdminRoutes, sendDailySummaryEmail, notifyOwnerLeadCaptured, notifyOwnerError, markLeadCustomerByEmail, createPendingSignup };
 
 // ─────────────────────────────────────────────────────────────
 // INTEGRATION INSTRUCTIONS
