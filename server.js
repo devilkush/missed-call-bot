@@ -58,7 +58,7 @@ MongoClient.connect(process.env.MONGODB_URI)
     db_helpers.ensureIndexes(db);
     initScheduler(app, db, db_helpers, emailService);
     registerAdminRoutes(app, db, db_helpers, emailService);
-    registerSalesRoutes(app, db);
+    registerSalesRoutes(app, db, db_helpers, emailService);
     registerDashboardRoute(app, db, db_helpers);
     registerBillingRoutes(app, db, db_helpers, emailService);
     console.log("✅ MongoDB connected");
