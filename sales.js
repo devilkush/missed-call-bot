@@ -31,6 +31,7 @@
 
 const { ObjectId } = require("mongodb");
 const email2 = require("./email2");
+const { createPendingSignup } = require("./admin");
 
 // ── FAVICON (optional) ───────────────────────
 // Paste the same base64 favicon string you used in admin.js
@@ -72,7 +73,7 @@ var TZ_LABEL = {
   "Pacific/Honolulu":    "HT",
 };
 
-var STAGES = ["new", "no_answer", "spoke", "interested", "invited", "trial", "customer", "lost"];
+var STAGES = ["new", "no_answer", "spoke", "interested", "invited", "signed_up", "trial", "customer", "lost"];
 
 var STAGE_META = {
   new:        { label: "NEW",        color: "#6b84a0" },
@@ -80,6 +81,7 @@ var STAGE_META = {
   spoke:      { label: "SPOKE",      color: "#4a9eda" },
   interested: { label: "INTERESTED", color: "#E8791A" },
   invited:    { label: "INVITED",    color: "#d4a017" },
+  signed_up:  { label: "SIGNED UP",  color: "#a78bfa" },
   trial:      { label: "TRIAL",      color: "#3ecf8e" },
   customer:   { label: "CUSTOMER",   color: "#3ecf8e" },
   lost:       { label: "LOST",       color: "#f05252" },
@@ -294,7 +296,7 @@ function computeStats(leads) {
     }
   }
 
-  var invited   = leads.filter(function(l) { return ["invited", "trial", "customer"].indexOf(l.stage) !== -1; }).length;
+  var invited   = leads.filter(function(l) { return ["invited", "signed_up", "trial", "customer"].indexOf(l.stage) !== -1; }).length;
   var trials    = leads.filter(function(l) { return l.stage === "trial" || l.stage === "customer"; }).length;
   var customers = leads.filter(function(l) { return l.stage === "customer"; }).length;
 
@@ -385,6 +387,7 @@ function buildQueueCard(l, isCallback) {
     btn("Spoke", "spoke", "rgba(74,158,218,0.12)", "#4a9eda", "rgba(74,158,218,0.3)") +
     btn("Not Interested", "not_interested", "rgba(240,82,82,0.1)", "#f05252", "rgba(240,82,82,0.25)") +
     btn("Interested &#8594; Invite", "interested", "#E8791A", "#fff", "#E8791A") +
+    "<button onclick='signupOnCall(\"" + l._id + "\",\"" + emailAttr + "\",\"" + ownerAttr + "\")' style='background:#3ecf8e;border:1px solid #3ecf8e;color:#06281c;border-radius:8px;padding:9px 14px;font-family:Nunito,sans-serif;font-size:12px;font-weight:900;cursor:pointer;'>&#9989; Sign Up On Call</button>" +
     "<button onclick='setCallback(\"" + l._id + "\")' style='background:rgba(255,255,255,0.03);border:1px dashed rgba(255,255,255,0.2);color:#6b84a0;border-radius:8px;padding:9px 14px;font-family:Nunito,sans-serif;font-size:12px;font-weight:800;cursor:pointer;'>&#128197; Callback</button>" +
     "</div>" +
     "</div>";
@@ -400,7 +403,7 @@ function buildSalesDashboardHtml(leads, imports) {
 
   var total      = leads.length;
   var fresh      = leads.filter(function(l) { return l.stage === "new"; }).length;
-  var interested = leads.filter(function(l) { return l.stage === "interested" || l.stage === "invited"; }).length;
+  var interested = leads.filter(function(l) { return l.stage === "interested" || l.stage === "invited" || l.stage === "signed_up"; }).length;
   var won        = leads.filter(function(l) { return l.stage === "trial" || l.stage === "customer"; }).length;
   var dnc        = leads.filter(function(l) { return l.doNotCall; }).length;
 
@@ -642,6 +645,21 @@ function buildSalesDashboardHtml(leads, imports) {
     "}catch(e){alert('Network error: '+e.message);}" +
     "}" +
 
+    "async function signupOnCall(id,email,owner){" +
+    "var useEmail=email;" +
+    "if(!useEmail){useEmail=prompt('Their email (required to set them up):');if(useEmail===null)return;useEmail=useEmail.trim();}" +
+    "if(!useEmail||useEmail.indexOf('@')===-1){alert('A valid email is required to sign them up.');return;}" +
+    "var useName=owner;" +
+    "if(!useName){useName=prompt('Their first name (optional):');if(useName)useName=useName.trim();}" +
+    "if(!confirm('Set up '+useEmail+' now? They will get a confirmation email to click while you are on the call.'))return;" +
+    "try{" +
+    "var r=await fetch('/admin/sales/leads/'+id+'/signup?secret='+encodeURIComponent(getSecret()),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:useEmail,name:useName||''})});" +
+    "var d=await r.json();" +
+    "if(r.ok){alert(d.message||'Signed up - tell them to check their email and click the link now.');location.reload();}" +
+    "else{alert((d&&(d.message||d.error))||'Sign up failed');}" +
+    "}catch(e){alert('Network error: '+e.message);}" +
+    "}" +
+
     "async function setCallback(id){" +
     "var hours=prompt('Call back in how many hours? (e.g. 2 = later today, 24 = tomorrow, 0 = clear callback)');" +
     "if(hours===null)return;" +
@@ -810,7 +828,7 @@ async function fetchOsmPlumbers(city, state) {
 // ─────────────────────────────────────────────
 // REGISTER SALES ROUTES
 // ─────────────────────────────────────────────
-function registerSalesRoutes(app, db) {
+function registerSalesRoutes(app, db, db_helpers, emailService) {
 
   // Indexes (safe to call on every boot)
   db.collection("leads").createIndex({ phone: 1 }).catch(function(e) {
@@ -1136,6 +1154,81 @@ function registerSalesRoutes(app, db) {
     } catch (err) {
       console.error("Log call error:", err.message);
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── SIGN UP A LEAD ON THE CALL ────────────────────────────
+  // POST /admin/sales/leads/:id/signup
+  // Body: { email*, name? }
+  // Creates the pending (unverified) account via the shared signup flow and
+  // sends the verification email, so you can tell the prospect "check your
+  // email and click the link" while they're still on the phone. The lead is
+  // moved to SIGNED_UP; it auto-flips to TRIAL when they verify (matchLeadToSignup).
+  app.post("/admin/sales/leads/:id/signup", requireAdminAuth, async (req, res) => {
+    try {
+      let leadId;
+      try {
+        leadId = new ObjectId(req.params.id);
+      } catch (e) {
+        return res.status(400).json({ error: "Invalid lead id" });
+      }
+
+      const lead = await db.collection("leads").findOne({ _id: leadId });
+      if (!lead) {
+        return res.status(404).json({ error: "Lead not found" });
+      }
+
+      const email = (req.body.email || lead.email || "").trim();
+      if (!email || email.indexOf("@") === -1) {
+        return res.status(400).json({ error: "Validation failed", message: "A valid email is required to sign them up." });
+      }
+      const ownerName = (req.body.name || lead.ownerName || "").trim() || "the team";
+      const phone = normalizePhone(lead.phone);
+      if (!phone) {
+        return res.status(400).json({ error: "Validation failed", message: "This lead has no valid phone number on file." });
+      }
+
+      // Don't create a second account if this email is already a plumber
+      const existing = await db.collection("plumbers").findOne({ email: email });
+      if (existing) {
+        return res.status(409).json({
+          error: "Duplicate",
+          message: email + " already has a ZeroMissCall account (status: " + (existing.verified ? "active" : "pending verification") + ").",
+        });
+      }
+
+      // Create the pending signup + send verification email (shared with /onboard)
+      const { plumber } = await createPendingSignup(
+        { db: db, db_helpers: db_helpers, emailService: emailService },
+        {
+          businessName: lead.businessName,
+          ownerName:    ownerName,
+          email:        email,
+          ownerPhone:   phone,
+          state:        lead.state || "",
+        }
+      );
+
+      // Move the lead to SIGNED_UP and save the email so verification auto-matches it
+      const now = new Date();
+      await db.collection("leads").updateOne(
+        { _id: leadId },
+        {
+          $set: { stage: "signed_up", email: email, ownerName: ownerName, callbackAt: null, updatedAt: now },
+          $push: { notes: { at: now, text: "Signed up on call - verification email sent to " + email } },
+        }
+      );
+
+      console.log("Signed up on call: " + lead.businessName + " (" + email + ") - awaiting verification");
+
+      res.json({
+        success: true,
+        message: "Account created for " + email + ". Tell them to open the email and click the confirmation link now - they'll be live in 2 minutes.",
+        stage: "signed_up",
+      });
+    } catch (err) {
+      console.error("Signup-on-call error:", err.message);
+      res.status(500).json({ error: err.message, message: "Couldn't set them up: " + err.message });
     }
   });
 
