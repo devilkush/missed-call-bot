@@ -155,14 +155,16 @@ function forwardingInstructionsHtml(plumber) {
 // Sends on day 3 of trial if no calls have come in yet
 // Purpose: catch plumbers who signed up but never set up call forwarding
 // ─────────────────────────────────────────────────────────────────────────────
-function buildDay3CheckinEmail(plumber) {
+function buildDay3CheckinEmail(plumber, daysSince) {
   var dash = RAILWAY + "/dashboard/" + plumber.dashboardToken;
+  var days = (typeof daysSince === "number" && daysSince > 0) ? daysSince : 3;
+  var daysPhrase = days + " day" + (days === 1 ? "" : "s") + " ago";
 
   var body =
     section(
       greeting(plumber.ownerName) +
       "<p style='font-family:Arial,Helvetica,sans-serif;font-size:20px;font-weight:700;color:#0b1928;margin:0 0 16px 0;'>Is ZeroMissCall set up on your phone?</p>" +
-      bodyText("You signed up 3 days ago but we have not seen any missed calls come through yet. That usually means call forwarding has not been set up on your phone.") +
+      bodyText("You signed up " + daysPhrase + " but we have not seen any missed calls come through yet. That usually means call forwarding has not been set up on your phone.") +
       bodyText("Call forwarding is the one step that makes everything work. It only takes 2 minutes.")
     ) +
     "<table width='100%' cellpadding='0' cellspacing='0' border='0'><tr><td class='pad' style='padding:20px 40px;'>" +
@@ -179,7 +181,7 @@ function buildDay3CheckinEmail(plumber) {
 
   return {
     subject: "Is ZeroMissCall set up on your phone, " + plumber.ownerName + "?",
-    html: wrap(body, "You signed up 3 days ago but we have not seen any missed calls yet. Here is how to set up call forwarding."),
+    html: wrap(body, "We have not seen any missed calls yet. Here is how to set up call forwarding."),
   };
 }
 
@@ -384,11 +386,11 @@ function buildInvitationEmail(name) {
 }
 
 // ─── SEND FUNCTIONS ──────────────────────────────────────────────────────────
-async function sendDay3Checkin(plumber) {
+async function sendDay3Checkin(plumber, daysSince) {
   if (!plumber.email) return;
-  var t = buildDay3CheckinEmail(plumber);
+  var t = buildDay3CheckinEmail(plumber, daysSince);
   var r = await resend.emails.send({ from: FROM_IAN, to: plumber.email, subject: t.subject, html: t.html });
-  console.log("Day 3 checkin sent to " + plumber.email);
+  console.log("Forwarding nudge sent to " + plumber.email + " (day " + (daysSince || 3) + ")");
   return r;
 }
 
