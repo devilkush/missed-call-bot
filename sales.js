@@ -186,6 +186,68 @@ function validateLeadData(data) {
   return { errors: errors, phone: phone };
 }
 
+// ─────────────────────────────────────────────
+// LEAD SCORING / CLASSIFICATION
+// Tags each lead so junk can be filtered out and the best ones surfaced.
+// Nothing is deleted — these are just flags you can filter and bulk-action on.
+//   score:  "A" (call first) | "B" (call next) | "C" (skip/last)
+//   flags:  array of reasons, e.g. ["franchise"], ["wrong_trade"], ["wrong_area"]
+// ─────────────────────────────────────────────
+var FRANCHISE_PATTERNS = [
+  "roto-rooter", "roto rooter", "mr. rooter", "mr rooter", "abacus",
+  "bacon plumbing", "1-800-plumber", "1 800 plumber", "1800 plumber",
+  "mission ac", "john moore", "ars", "benjamin franklin", "rooter-man",
+  "rooter man", "servpro", "restoration 1", "rainbow restoration",
+  "roto rooter", "wm. ", "william ", "horizon services", "len the plumber",
+];
+var WRONG_TRADE_PATTERNS = [
+  "heating & cooling", "heating and cooling", "heating & air", "heating and air",
+  "air conditioning", "hvac", "a/c", " ac ", "mechanical", "electric",
+  "electrical", "restoration", "water damage", "septic", "remodel",
+  "construction", "roofing", "wholesale", "supply", "appliance",
+];
+// Solo-operator positive signals in the name
+var SOLO_PATTERNS = ["& sons", "and sons", "& son", "bros", "brothers", "family"];
+
+function scoreLead(lead) {
+  var name = (lead.businessName || "").toLowerCase();
+  var flags = [];
+
+  // Franchise / big-chain detection
+  for (var i = 0; i < FRANCHISE_PATTERNS.length; i++) {
+    if (name.indexOf(FRANCHISE_PATTERNS[i]) !== -1) { flags.push("franchise"); break; }
+  }
+  // Wrong trade (HVAC / restoration / supply etc.)
+  for (var j = 0; j < WRONG_TRADE_PATTERNS.length; j++) {
+    if (name.indexOf(WRONG_TRADE_PATTERNS[j]) !== -1) { flags.push("wrong_trade"); break; }
+  }
+  // Wrong area — anything not Texas (your current target market)
+  if (lead.state && lead.state !== "TX") flags.push("wrong_area");
+
+  // ── Decide the grade ──
+  var isPlumber = name.indexOf("plumb") !== -1; // name actually says plumbing
+  var score;
+  if (flags.indexOf("franchise") !== -1 || flags.indexOf("wrong_area") !== -1) {
+    score = "C"; // franchise or out-of-state → skip
+  } else if (flags.indexOf("wrong_trade") !== -1 && !isPlumber) {
+    score = "C"; // pure HVAC/restoration/supply, not a plumber → skip
+  } else if (flags.indexOf("wrong_trade") !== -1 && isPlumber) {
+    score = "B"; // a plumber that ALSO does AC etc — keep, just not top priority
+  } else {
+    // On-target. A vs B based on how "small operator" it looks.
+    var soloSignal = false;
+    for (var k = 0; k < SOLO_PATTERNS.length; k++) {
+      if (name.indexOf(SOLO_PATTERNS[k]) !== -1) { soloSignal = true; break; }
+    }
+    var noWebsite = !lead.website;            // lean operator = strong buy signal
+    var hasContact = !!(lead.email || lead.ownerName); // easier to sign up on call
+
+    if (noWebsite || soloSignal || hasContact) score = "A";
+    else score = "B";
+  }
+  return { score: score, flags: flags };
+}
+
 function newLeadDoc(fields, source) {
   var now = new Date();
   var state = fields.state ? String(fields.state).trim().toUpperCase() : "";
@@ -208,6 +270,9 @@ function newLeadDoc(fields, source) {
     createdAt:    now,
     updatedAt:    now,
   };
+  var graded = scoreLead(lead);
+  lead.score = graded.score;
+  lead.flags = graded.flags;
   if (fields.note && String(fields.note).trim()) {
     lead.notes.push({ at: now, text: String(fields.note).trim() });
   }
@@ -407,6 +472,16 @@ function buildSalesDashboardHtml(leads, imports) {
   var won        = leads.filter(function(l) { return l.stage === "trial" || l.stage === "customer"; }).length;
   var dnc        = leads.filter(function(l) { return l.doNotCall; }).length;
 
+  // Counts for the filter bar
+  var cntA = leads.filter(function(l) { return l.score === "A"; }).length;
+  var cntB = leads.filter(function(l) { return l.score === "B"; }).length;
+  var cntC = leads.filter(function(l) { return l.score === "C"; }).length;
+  var cntEmail = leads.filter(function(l) { return !!l.email; }).length;
+  var cntName = leads.filter(function(l) { return !!l.ownerName; }).length;
+  var cntNoWeb = leads.filter(function(l) { return !l.website; }).length;
+  var cntOff = leads.filter(function(l) { return (l.flags || []).length > 0; }).length;
+  var cntUnscored = leads.filter(function(l) { return !l.score; }).length;
+
   function card(n, label, color) {
     return "<div style='background:rgba(255,255,255,0.038);border:1px solid rgba(255,255,255,0.07);border-radius:14px;padding:16px;text-align:center;'>" +
       "<div style='font-family:Nunito,sans-serif;font-size:28px;font-weight:900;color:" + color + ";letter-spacing:-1px;'>" + n + "</div>" +
@@ -504,6 +579,7 @@ function buildSalesDashboardHtml(leads, imports) {
     }).join("");
 
   // ── Lead table rows ──
+  var SCORE_COLOR = { A: "#3ecf8e", B: "#d4a017", C: "#6b84a0" };
   var rows = leads.map(function(l) {
     var meta = STAGE_META[l.stage] || STAGE_META.new;
     var lt = localTimeFor(l.timezone);
@@ -523,7 +599,27 @@ function buildSalesDashboardHtml(leads, imports) {
         new Date(l.callbackAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) + "</div>"
       : "";
 
-    return "<tr class='lead-row' data-stage='" + l.stage + "' style='border-bottom:1px solid rgba(255,255,255,0.07);" + dncStyle + "'>" +
+    var score = l.score || "";
+    var flags = (l.flags || []);
+    var scoreColor = SCORE_COLOR[score] || "#6b84a0";
+    var scoreBadge = score
+      ? "<span style='background:" + scoreColor + "22;color:" + scoreColor + ";font-size:11px;font-weight:900;padding:2px 8px;border-radius:6px;'>" + score + "</span>"
+      : "";
+    var flagBadge = flags.length > 0
+      ? "<div style='font-size:9px;color:#f05252;margin-top:3px;text-transform:uppercase;letter-spacing:0.3px;'>" + flags.join(" &middot; ").replace(/_/g, " ") + "</div>"
+      : "";
+    // filter data
+    var hasEmail = l.email ? "1" : "0";
+    var hasName = l.ownerName ? "1" : "0";
+    var hasWebsite = l.website ? "1" : "0";
+    var calledData = attemptsCount > 0 ? "1" : "0";
+    var searchData = escapeHtml(((l.businessName || "") + " " + (l.city || "") + " " + (l.phone || "") + " " + (l.ownerName || "") + " " + (l.email || "")).toLowerCase());
+
+    return "<tr class='lead-row' data-stage='" + l.stage + "' data-score='" + score + "' data-flags='" + flags.join(",") + "'" +
+      " data-email='" + hasEmail + "' data-name='" + hasName + "' data-website='" + hasWebsite + "' data-called='" + calledData + "'" +
+      " data-dnc='" + (l.doNotCall ? "1" : "0") + "' data-search='" + searchData + "' style='border-bottom:1px solid rgba(255,255,255,0.07);" + dncStyle + "'>" +
+      "<td style='padding:12px 8px 12px 16px;text-align:center;'><input type='checkbox' class='lead-check' value='" + l._id + "' onchange='updateSelCount()' style='width:16px;height:16px;cursor:pointer;'/></td>" +
+      "<td style='padding:12px 8px;text-align:center;'>" + scoreBadge + flagBadge + "</td>" +
       "<td style='padding:12px 16px;font-size:13px;color:#fff;font-weight:600;'>" +
         escapeHtml(l.businessName) + websiteLink +
         "<div style='font-size:11px;color:#6b84a0;margin-top:2px;'>" + escapeHtml(l.ownerName || "owner unknown") + "</div>" +
@@ -720,12 +816,68 @@ function buildSalesDashboardHtml(leads, imports) {
     "}catch(e){alert('Network error: '+e.message);}" +
     "}" +
 
-    "function filterStage(){" +
-    "var v=document.getElementById('stage-filter').value;" +
-    "var rows=document.querySelectorAll('.lead-row');" +
-    "for(var i=0;i<rows.length;i++){" +
-    "rows[i].style.display=(v==='all'||rows[i].getAttribute('data-stage')===v)?'':'none';" +
+    "var FILT={score:'all',email:false,name:false,nowebsite:false,hideoff:false,stage:'all',search:''};" +
+
+    "function setScore(s){FILT.score=s;var b=document.querySelectorAll('.scorebtn');for(var i=0;i<b.length;i++){b[i].style.opacity=(b[i].getAttribute('data-s')===s)?'1':'0.45';}applyFilters();}" +
+    "function tog(key,el){FILT[key]=!FILT[key];el.style.opacity=FILT[key]?'1':'0.45';el.style.borderColor=FILT[key]?'#E8791A':'rgba(255,255,255,0.18)';applyFilters();}" +
+    "function setStageFilter(){FILT.stage=document.getElementById('stage-filter').value;applyFilters();}" +
+    "function onSearch(v){FILT.search=v.toLowerCase().trim();applyFilters();}" +
+
+    "function applyFilters(){" +
+    "var rows=document.querySelectorAll('.lead-row');var shown=0;" +
+    "for(var i=0;i<rows.length;i++){var r=rows[i];var ok=true;" +
+    "if(FILT.score!=='all'&&r.getAttribute('data-score')!==FILT.score)ok=false;" +
+    "if(FILT.email&&r.getAttribute('data-email')!=='1')ok=false;" +
+    "if(FILT.name&&r.getAttribute('data-name')!=='1')ok=false;" +
+    "if(FILT.nowebsite&&r.getAttribute('data-website')!=='0')ok=false;" +
+    "if(FILT.hideoff&&(r.getAttribute('data-flags')||'').length>0)ok=false;" +
+    "if(FILT.stage!=='all'&&r.getAttribute('data-stage')!==FILT.stage)ok=false;" +
+    "if(FILT.search&&(r.getAttribute('data-search')||'').indexOf(FILT.search)===-1)ok=false;" +
+    "r.style.display=ok?'':'none';if(ok)shown++;" +
     "}" +
+    "var sc=document.getElementById('shown-count');if(sc)sc.textContent=shown;" +
+    "updateSelCount();" +
+    "}" +
+
+    "function bestTwenty(){" +
+    "FILT={score:'A',email:false,name:false,nowebsite:false,hideoff:true,stage:'new',search:''};" +
+    "document.getElementById('stage-filter').value='new';" +
+    "var b=document.querySelectorAll('.scorebtn');for(var i=0;i<b.length;i++){b[i].style.opacity=(b[i].getAttribute('data-s')==='A')?'1':'0.45';}" +
+    "var rows=document.querySelectorAll('.lead-row');var shown=0;" +
+    "for(var j=0;j<rows.length;j++){var r=rows[j];" +
+    "var ok=(r.getAttribute('data-score')==='A'&&r.getAttribute('data-stage')==='new'&&(r.getAttribute('data-flags')||'').length===0&&r.getAttribute('data-dnc')==='0');" +
+    "if(ok&&shown>=20)ok=false;" +
+    "r.style.display=ok?'':'none';if(ok)shown++;}" +
+    "var sc=document.getElementById('shown-count');if(sc)sc.textContent=shown;" +
+    "window.scrollTo(0,document.getElementById('all-leads-head').offsetTop-70);" +
+    "}" +
+
+    "function toggleAll(el){var rows=document.querySelectorAll('.lead-row');var checks=document.querySelectorAll('.lead-check');" +
+    "for(var i=0;i<checks.length;i++){if(rows[i].style.display!=='none')checks[i].checked=el.checked;}updateSelCount();}" +
+
+    "function updateSelCount(){var c=document.querySelectorAll('.lead-check:checked').length;var e=document.getElementById('sel-count');if(e)e.textContent=c;}" +
+
+    "function selectedIds(){var c=document.querySelectorAll('.lead-check:checked');var ids=[];for(var i=0;i<c.length;i++)ids.push(c[i].value);return ids;}" +
+
+    "async function bulkAction(action){" +
+    "var ids=selectedIds();" +
+    "if(ids.length===0){alert('Select some leads first (tick the boxes).');return;}" +
+    "var verb=action==='delete'?'DELETE':action==='dnc'?'mark Do Not Call':'un-mark';" +
+    "if(!confirm(verb+' '+ids.length+' lead'+(ids.length!==1?'s':'')+'?'+(action==='delete'?' This cannot be undone.':'')))return;" +
+    "try{" +
+    "var r=await fetch('/admin/sales/leads/bulk?secret='+encodeURIComponent(getSecret()),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:ids,action:action})});" +
+    "var d=await r.json();" +
+    "if(r.ok){alert(d.message);location.reload();}else{alert((d&&(d.message||d.error))||'Bulk action failed');}" +
+    "}catch(e){alert('Network error: '+e.message);}" +
+    "}" +
+
+    "async function rescoreAll(){" +
+    "if(!confirm('Re-score all leads now? This tags franchises, wrong-trade and out-of-area leads so you can filter them.'))return;" +
+    "try{" +
+    "var r=await fetch('/admin/sales/rescore?secret='+encodeURIComponent(getSecret()),{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});" +
+    "var d=await r.json();" +
+    "if(r.ok){alert(d.message);location.reload();}else{alert((d&&(d.message||d.error))||'Rescore failed');}" +
+    "}catch(e){alert('Network error: '+e.message);}" +
     "}" +
     "<\/script>";
 
@@ -749,15 +901,49 @@ function buildSalesDashboardHtml(leads, imports) {
     queueHtml +
     importSection +
     addLeadForm +
-    "<div style='display:flex;align-items:center;justify-content:space-between;margin:24px 0 12px;'>" +
-    "<h2 style='font-family:Nunito,sans-serif;font-size:16px;font-weight:900;'>All Leads (" + total + ")</h2>" +
-    "<select id='stage-filter' onchange='filterStage()' style='background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:8px 12px;font-size:13px;color:#fff;font-family:DM Sans,sans-serif;outline:none;'>" + stageOptions + "</select>" +
+    "<h2 id='all-leads-head' style='font-family:Nunito,sans-serif;font-size:16px;font-weight:900;margin:24px 0 12px;'>All Leads (<span id='shown-count'>" + total + "</span> shown of " + total + ")</h2>" +
+
+    // ── FILTER BAR ──
+    "<div style='background:rgba(255,255,255,0.025);border:1px solid var(--border);border-radius:14px;padding:14px 16px;margin-bottom:12px;'>" +
+    // search + best20 + rescore row
+    "<div style='display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;'>" +
+    "<input id='search-box' type='text' placeholder='&#128269; Search name, city, phone...' oninput='onSearch(this.value)' style='" + inputStyle + "flex:1;min-width:200px;width:auto;'/>" +
+    "<button onclick='bestTwenty()' style='background:#3ecf8e;color:#06281c;border:none;border-radius:8px;padding:10px 18px;font-family:Nunito,sans-serif;font-size:13px;font-weight:900;cursor:pointer;white-space:nowrap;'>&#11088; Best 20 to Call</button>" +
+    (cntUnscored > 0
+      ? "<button onclick='rescoreAll()' style='background:#E8791A;color:#fff;border:none;border-radius:8px;padding:10px 18px;font-family:Nunito,sans-serif;font-size:13px;font-weight:800;cursor:pointer;white-space:nowrap;'>Score " + cntUnscored + " unscored leads</button>"
+      : "<button onclick='rescoreAll()' style='background:rgba(255,255,255,0.06);color:#96aec6;border:1px solid rgba(255,255,255,0.18);border-radius:8px;padding:10px 14px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;'>Re-score all</button>") +
     "</div>" +
+    // score buttons + toggles row
+    "<div style='display:flex;gap:8px;flex-wrap:wrap;align-items:center;'>" +
+    "<span style='font-size:11px;color:#6b84a0;font-weight:700;text-transform:uppercase;margin-right:2px;'>Grade:</span>" +
+    "<button class='scorebtn' data-s='all' onclick='setScore(\"all\")' style='opacity:1;background:rgba(255,255,255,0.08);color:#fff;border:1px solid rgba(255,255,255,0.18);border-radius:7px;padding:7px 12px;font-size:12px;font-weight:800;cursor:pointer;'>All " + total + "</button>" +
+    "<button class='scorebtn' data-s='A' onclick='setScore(\"A\")' style='opacity:0.45;background:rgba(62,207,142,0.15);color:#3ecf8e;border:1px solid rgba(62,207,142,0.3);border-radius:7px;padding:7px 12px;font-size:12px;font-weight:800;cursor:pointer;'>A " + cntA + "</button>" +
+    "<button class='scorebtn' data-s='B' onclick='setScore(\"B\")' style='opacity:0.45;background:rgba(212,160,23,0.15);color:#d4a017;border:1px solid rgba(212,160,23,0.3);border-radius:7px;padding:7px 12px;font-size:12px;font-weight:800;cursor:pointer;'>B " + cntB + "</button>" +
+    "<button class='scorebtn' data-s='C' onclick='setScore(\"C\")' style='opacity:0.45;background:rgba(107,132,160,0.15);color:#96aec6;border:1px solid rgba(107,132,160,0.3);border-radius:7px;padding:7px 12px;font-size:12px;font-weight:800;cursor:pointer;'>C " + cntC + "</button>" +
+    "<span style='width:1px;height:22px;background:rgba(255,255,255,0.12);margin:0 4px;'></span>" +
+    "<button onclick='tog(\"email\",this)' style='opacity:0.45;background:rgba(255,255,255,0.05);color:#fff;border:1px solid rgba(255,255,255,0.18);border-radius:7px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;'>&#9993; Has email " + cntEmail + "</button>" +
+    "<button onclick='tog(\"name\",this)' style='opacity:0.45;background:rgba(255,255,255,0.05);color:#fff;border:1px solid rgba(255,255,255,0.18);border-radius:7px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;'>&#128100; Has name " + cntName + "</button>" +
+    "<button onclick='tog(\"nowebsite\",this)' style='opacity:0.45;background:rgba(255,255,255,0.05);color:#fff;border:1px solid rgba(255,255,255,0.18);border-radius:7px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;'>No website " + cntNoWeb + "</button>" +
+    "<button onclick='tog(\"hideoff\",this)' style='opacity:0.45;background:rgba(255,255,255,0.05);color:#f05252;border:1px solid rgba(255,255,255,0.18);border-radius:7px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;'>Hide off-target " + cntOff + "</button>" +
+    "<select id='stage-filter' onchange='setStageFilter()' style='background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:7px;padding:7px 10px;font-size:12px;color:#fff;font-family:DM Sans,sans-serif;outline:none;'>" + stageOptions + "</select>" +
+    "</div>" +
+    "</div>" +
+
+    // ── BULK ACTION BAR ──
+    "<div style='display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;'>" +
+    "<span style='font-size:12px;color:#6b84a0;'><span id='sel-count' style='color:#fff;font-weight:800;'>0</span> selected</span>" +
+    "<button onclick='bulkAction(\"dnc\")' style='background:rgba(240,82,82,0.1);color:#f05252;border:1px solid rgba(240,82,82,0.25);border-radius:7px;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer;'>Mark DNC</button>" +
+    "<button onclick='bulkAction(\"undnc\")' style='background:rgba(255,255,255,0.05);color:#96aec6;border:1px solid rgba(255,255,255,0.18);border-radius:7px;padding:7px 14px;font-size:12px;font-weight:700;cursor:pointer;'>Un-DNC</button>" +
+    "<button onclick='bulkAction(\"delete\")' style='background:rgba(240,82,82,0.16);color:#ff6b6b;border:1px solid rgba(240,82,82,0.4);border-radius:7px;padding:7px 14px;font-size:12px;font-weight:800;cursor:pointer;'>&#128465; Delete selected</button>" +
+    "<span style='font-size:11px;color:#6b84a0;'>Tip: filter to a grade, tick &lsquo;select all&rsquo;, then bulk-action.</span>" +
+    "</div>" +
+
     "<div style='background:rgba(255,255,255,0.025);border:1px solid var(--border);border-radius:14px;overflow:hidden;'>" +
     "<table><thead><tr style='border-bottom:1px solid var(--border);'>" +
-    "<th>Business</th><th>Phone / Email</th><th>Location / Local Time</th><th style='text-align:center;'>Stage</th><th class='hide-mobile'>Last Note</th><th style='text-align:center;'>Actions</th>" +
+    "<th style='text-align:center;padding:10px 8px 10px 16px;'><input type='checkbox' onchange='toggleAll(this)' style='width:16px;height:16px;cursor:pointer;'/></th>" +
+    "<th style='text-align:center;'>Grade</th><th>Business</th><th>Phone / Email</th><th>Location / Local Time</th><th style='text-align:center;'>Stage</th><th class='hide-mobile'>Last Note</th><th style='text-align:center;'>Actions</th>" +
     "</tr></thead><tbody>" +
-    (rows || "<tr><td colspan='6' style='padding:40px;text-align:center;color:#6b84a0;'>No leads yet - import some above or add one manually</td></tr>") +
+    (rows || "<tr><td colspan='8' style='padding:40px;text-align:center;color:#6b84a0;'>No leads yet - import some above or add one manually</td></tr>") +
     "</tbody></table></div>" +
     "<p style='font-size:12px;color:#6b84a0;margin-top:16px;text-align:center;'>Green local time = inside calling window (8am-6pm their time) &mdash; Red = outside window</p>" +
     "</div>" +
@@ -1337,6 +1523,78 @@ function registerSalesRoutes(app, db, db_helpers, emailService) {
       res.json({ success: true, message: lead.businessName + " updated" });
     } catch (err) {
       console.error("Edit lead error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── RESCORE ALL LEADS ─────────────────────────────────────
+  // Backfills score + flags onto every existing lead (e.g. ones
+  // imported before scoring existed). Safe to run repeatedly.
+  app.post("/admin/sales/rescore", requireAdminAuth, async (req, res) => {
+    try {
+      const leads = await db.collection("leads").find({}).toArray();
+      let updated = 0;
+      const tally = { A: 0, B: 0, C: 0 };
+      for (const lead of leads) {
+        const graded = scoreLead(lead);
+        tally[graded.score] = (tally[graded.score] || 0) + 1;
+        await db.collection("leads").updateOne(
+          { _id: lead._id },
+          { $set: { score: graded.score, flags: graded.flags, updatedAt: new Date() } }
+        );
+        updated++;
+      }
+      console.log("Rescored " + updated + " leads: A=" + tally.A + " B=" + tally.B + " C=" + tally.C);
+      res.json({
+        success: true,
+        updated: updated,
+        tally: tally,
+        message: "Scored " + updated + " leads — " + tally.A + " A-leads, " + tally.B + " B, " + tally.C + " C (off-target).",
+      });
+    } catch (err) {
+      console.error("Rescore error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── BULK ACTION ───────────────────────────────────────────
+  // POST /admin/sales/leads/bulk  Body: { ids:[...], action:"dnc"|"undnc"|"delete" }
+  // Lets you filter to junk (franchise/wrong-trade/wrong-area) and remove it in one click.
+  app.post("/admin/sales/leads/bulk", requireAdminAuth, async (req, res) => {
+    try {
+      const action = req.body.action;
+      const rawIds = Array.isArray(req.body.ids) ? req.body.ids : [];
+      if (["dnc", "undnc", "delete"].indexOf(action) === -1) {
+        return res.status(400).json({ error: "Validation failed", message: "action must be dnc, undnc, or delete" });
+      }
+      const ids = [];
+      for (let i = 0; i < rawIds.length; i++) {
+        try { ids.push(new ObjectId(rawIds[i])); } catch (e) { /* skip bad id */ }
+      }
+      if (ids.length === 0) {
+        return res.status(400).json({ error: "Validation failed", message: "No valid lead ids supplied" });
+      }
+
+      let affected = 0;
+      if (action === "delete") {
+        const r = await db.collection("leads").deleteMany({ _id: { $in: ids } });
+        affected = r.deletedCount || 0;
+      } else {
+        const r = await db.collection("leads").updateMany(
+          { _id: { $in: ids } },
+          { $set: { doNotCall: action === "dnc", updatedAt: new Date() } }
+        );
+        affected = r.modifiedCount || 0;
+      }
+      console.log("Bulk " + action + ": " + affected + " leads");
+      res.json({
+        success: true,
+        affected: affected,
+        message: affected + " lead" + (affected !== 1 ? "s" : "") + " " +
+          (action === "delete" ? "deleted" : action === "dnc" ? "marked Do Not Call" : "un-marked"),
+      });
+    } catch (err) {
+      console.error("Bulk action error:", err.message);
       res.status(500).json({ error: err.message });
     }
   });
