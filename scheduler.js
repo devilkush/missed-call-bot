@@ -365,47 +365,45 @@ function initScheduler(app, db, db_helpers, emailService) {
   console.log("   📧 Monthly report     - last day of month at 5:00 AM UTC");
   console.log("   🔒 Trial expiry       - daily at midnight UTC");
 
-  // ─── DAY 3 CHECK-IN - 9:00 AM UTC daily ──────────────────
+  // ─── FORWARDING NUDGES - 9:00 AM UTC daily ───────────────
+  // Gently reminds customers who haven't set up call forwarding yet.
+  // Fires on day 3, 6, and 10 of the trial — each nudge AT MOST ONCE.
+  // Stops the moment ANY call/conversation comes through their number
+  // (that's proof forwarding is working). Replaces the old day-3 +
+  // forwarding-detection jobs that double-sent the same email daily.
   cron.schedule("0 9 * * *", async () => {
     try {
-      var plumbers = await db_helpers.getAllActivePlumbers(db);
-      var now = new Date();
-      for (var i = 0; i < plumbers.length; i++) {
-        var plumber = plumbers[i];
-        var daysSince = Math.floor((now - new Date(plumber.createdAt)) / (1000 * 60 * 60 * 24));
-        if (daysSince === 3 && !plumber.day3CheckinSent) {
-          var stats = await db_helpers.getStats(db, plumber.twilioNumber, new Date(plumber.createdAt), now);
-          if ((stats.totalConversations || 0) === 0) {
-            await emailService2.sendDay3Checkin(plumber);
-            await db_helpers.updatePlumber(db, plumber.twilioNumber, { day3CheckinSent: true });
-            console.log("Day 3 checkin sent to " + plumber.businessName);
-          }
-        }
-      }
-    } catch (err) {
-      console.error("Day 3 checkin error:", err.message);
-    }
-  }, { timezone: "UTC" });
-
-  // ─── FORWARDING DETECTION - 10:00 AM UTC daily ───────────
-  cron.schedule("0 10 * * *", async () => {
-    try {
+      var NUDGE_DAYS = [3, 6, 10];
       var plumbers = await db_helpers.getAllActivePlumbers(db);
       var now = new Date();
       for (var i = 0; i < plumbers.length; i++) {
         var plumber = plumbers[i];
         if (plumber.subscriptionStatus === "expired") continue;
-        var hoursSince = Math.floor((now - new Date(plumber.createdAt)) / (1000 * 60 * 60));
-        if (hoursSince < 48 || plumber.forwardingNudgeSent) continue;
-        var stats = await db_helpers.getStats(db, plumber.twilioNumber, new Date(plumber.createdAt), now);
-        if ((stats.totalConversations || 0) === 0) {
-          await emailService2.sendDay3Checkin(plumber);
-          await db_helpers.updatePlumber(db, plumber.twilioNumber, { forwardingNudgeSent: true });
-          console.log("Forwarding nudge sent to " + plumber.businessName);
+        if (!plumber.twilioNumber) continue; // not activated yet
+
+        var daysSince = Math.floor((now - new Date(plumber.createdAt)) / (1000 * 60 * 60 * 24));
+        var sent = plumber.forwardingNudgesSent || [];
+
+        // Find the earliest nudge day that's due and not yet sent (one per run)
+        var due = null;
+        for (var d = 0; d < NUDGE_DAYS.length; d++) {
+          var day = NUDGE_DAYS[d];
+          if (daysSince >= day && sent.indexOf(day) === -1) { due = day; break; }
         }
+        if (due === null) continue;
+
+        // Only nudge if they STILL have zero calls — any call means they're live, so stop
+        var stats = await db_helpers.getStats(db, plumber.twilioNumber, new Date(plumber.createdAt), now);
+        if ((stats.totalConversations || 0) > 0) continue;
+
+        await emailService2.sendDay3Checkin(plumber, daysSince);
+        await db_helpers.updatePlumber(db, plumber.twilioNumber, {
+          forwardingNudgesSent: sent.concat([due]),
+        });
+        console.log("Forwarding nudge (day " + due + ") sent to " + plumber.businessName);
       }
     } catch (err) {
-      console.error("Forwarding detection error:", err.message);
+      console.error("Forwarding nudge error:", err.message);
     }
   }, { timezone: "UTC" });
 
