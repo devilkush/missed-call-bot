@@ -221,8 +221,12 @@ function scoreLead(lead) {
   for (var j = 0; j < WRONG_TRADE_PATTERNS.length; j++) {
     if (name.indexOf(WRONG_TRADE_PATTERNS[j]) !== -1) { flags.push("wrong_trade"); break; }
   }
-  // Wrong area — anything not Texas (your current target market)
-  if (lead.state && lead.state !== "TX") flags.push("wrong_area");
+  // Wrong area — anything not Texas (your current target market).
+  // Leads may store state as "TX" or the full word "TEXAS" (Outscraper does the
+  // latter), so normalise before judging — otherwise every TX lead looks foreign.
+  var st = (lead.state || "").toString().trim().toUpperCase();
+  var isTexas = (st === "TX" || st === "TEXAS");
+  if (st && !isTexas) flags.push("wrong_area");
 
   // ── Decide the grade ──
   var isPlumber = name.indexOf("plumb") !== -1; // name actually says plumbing
