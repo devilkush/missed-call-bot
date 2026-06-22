@@ -23,7 +23,6 @@
 // ─────────────────────────────────────────────────────────────
 
 const Stripe = require("stripe");
-const emailService2 = require("./email2");
 
 function registerBillingRoutes(app, db, db_helpers, emailService) {
 
@@ -63,9 +62,10 @@ function registerBillingRoutes(app, db, db_helpers, emailService) {
         });
         customerId = customer.id;
 
-        await db_helpers.updatePlumber(db, plumber.twilioNumber, {
-          stripeCustomerId: customerId,
-        });
+        await db.collection("plumbers").updateOne(
+          { _id: plumber._id },
+          { $set: { stripeCustomerId: customerId, updatedAt: new Date() } }
+        );
       }
 
       // Create Stripe Checkout session
@@ -196,21 +196,34 @@ function registerBillingRoutes(app, db, db_helpers, emailService) {
           // ── Payment succeeded → activate subscription ──────
           case "checkout.session.completed": {
             const session = event.data.object;
-            const twilioNumber = session.metadata?.twilioNumber;
-            if (!twilioNumber) break;
+            // Look the plumber up by a UNIQUE key, never by the (possibly shared)
+            // phone number. dashboardToken is unique per account; fall back to the
+            // Stripe customer id which is also unique.
+            let plumber = null;
+            const token = session.metadata?.dashboardToken;
+            if (token) plumber = await db_helpers.getPlumberByToken(db, token);
+            if (!plumber && session.customer) {
+              plumber = await db.collection("plumbers").findOne({ stripeCustomerId: session.customer });
+            }
+            if (!plumber) {
+              console.warn("⚠️ checkout.session.completed: could not match a plumber");
+              break;
+            }
 
-            await db_helpers.updatePlumber(db, twilioNumber, {
-              subscriptionStatus:    "active",
-              stripeCustomerId:      session.customer,
-              stripeSubscriptionId:  session.subscription,
-              active:                true,
-            });
+            await db.collection("plumbers").updateOne(
+              { _id: plumber._id },
+              { $set: {
+                  subscriptionStatus:   "active",
+                  stripeCustomerId:     session.customer,
+                  stripeSubscriptionId: session.subscription,
+                  active:               true,
+                  updatedAt:            new Date(),
+                } }
+            );
 
-            console.log(`✅ Subscription activated: ${twilioNumber}`);
+            console.log(`✅ Subscription activated: ${plumber.businessName} (${plumber.twilioNumber})`);
 
-            // Send activation confirmation email
-            const plumber = await db_helpers.getPlumberByTwilioNumber(db, twilioNumber);
-            if (plumber && plumber.email) {
+            if (plumber.email) {
               await sendActivationEmail(plumber, stripe);
             }
             break;
@@ -225,10 +238,10 @@ function registerBillingRoutes(app, db, db_helpers, emailService) {
                 stripeCustomerId: invoice.customer,
               });
               if (plumber) {
-                await db_helpers.updatePlumber(db, plumber.twilioNumber, {
-                  subscriptionStatus: "active",
-                  active: true,
-                });
+                await db.collection("plumbers").updateOne(
+                  { _id: plumber._id },
+                  { $set: { subscriptionStatus: "active", active: true, updatedAt: new Date() } }
+                );
                 console.log(`✅ Renewal logged: ${plumber.businessName}`);
               }
             }
@@ -237,13 +250,23 @@ function registerBillingRoutes(app, db, db_helpers, emailService) {
 
           // ── Invoice payment failed → flag account ──────────
           case "invoice.payment_failed": {
+        // Send payment failed email
+        try {
+          const failedCustomerId = event.data.object.customer;
+          const failedPlumber = await db.collection("plumbers").findOne({ stripeCustomerId: failedCustomerId });
+          if (failedPlumber) {
+            await emailService2.sendPaymentFailedEmail(failedPlumber);
+          }
+        } catch (e) {
+          console.error("Payment failed email error:", e.message);
+        }
             const invoice = event.data.object;
             const plumber = await db.collection("plumbers").findOne({
               stripeCustomerId: invoice.customer,
             });
             if (plumber) {
               console.warn(`⚠️  Payment failed: ${plumber.businessName} (${plumber.email})`);
-              await sendPaymentFailedEmail(plumber);
+              await sendPaymentFailedEmail(plumber, stripe, emailService);
             }
             break;
           }
@@ -278,11 +301,15 @@ function registerBillingRoutes(app, db, db_helpers, emailService) {
               stripeCustomerId: sub.customer,
             });
             if (plumber) {
-              await db_helpers.updatePlumber(db, plumber.twilioNumber, {
-                subscriptionStatus:   "cancelled",
-                active:               false,
-                stripeSubscriptionId: null,
-              });
+              await db.collection("plumbers").updateOne(
+                { _id: plumber._id },
+                { $set: {
+                    subscriptionStatus:   "cancelled",
+                    active:               false,
+                    stripeSubscriptionId: null,
+                    updatedAt:            new Date(),
+                  } }
+              );
               console.log(`🔴 Subscription cancelled: ${plumber.businessName}`);
             }
             break;
@@ -302,9 +329,10 @@ function registerBillingRoutes(app, db, db_helpers, emailService) {
                 unpaid:   "expired",
               };
               const newStatus = statusMap[sub.status] || plumber.subscriptionStatus;
-              await db_helpers.updatePlumber(db, plumber.twilioNumber, {
-                subscriptionStatus: newStatus,
-              });
+              await db.collection("plumbers").updateOne(
+                { _id: plumber._id },
+                { $set: { subscriptionStatus: newStatus, updatedAt: new Date() } }
+              );
               console.log(`🔄 Subscription updated: ${plumber.businessName} → ${newStatus}`);
             }
             break;
@@ -331,6 +359,7 @@ function registerBillingRoutes(app, db, db_helpers, emailService) {
 async function sendActivationEmail(plumber, stripe) {
   if (!process.env.RESEND_API_KEY) return;
   const { Resend } = require("resend");
+const emailService2 = require("./email2");
   const resend = new Resend(process.env.RESEND_API_KEY);
 
   await resend.emails.send({
@@ -386,6 +415,7 @@ async function sendActivationEmail(plumber, stripe) {
 async function sendPaymentFailedEmail(plumber) {
   if (!process.env.RESEND_API_KEY || !plumber.email) return;
   const { Resend } = require("resend");
+const emailService2 = require("./email2");
   const resend = new Resend(process.env.RESEND_API_KEY);
 
   await resend.emails.send({
