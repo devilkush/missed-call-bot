@@ -75,7 +75,7 @@ function buildDashboardHtml(plumber, stats, conversations) {
     <div style="background:linear-gradient(135deg,rgba(232,121,26,0.08),rgba(15,32,53,0.6));border:1px solid rgba(232,121,26,0.22);border-radius:14px;padding:14px 20px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
       <div>
         <div style="font-family:'Nunito',sans-serif;font-size:13px;font-weight:800;color:#f08e32;margin-bottom:2px;">Free Trial Active</div>
-        <div style="font-size:11px;color:#f05252;margin-top:2px;font-weight:700;">${Math.ceil((new Date(plumber.trialEndDate) - new Date()) / (1000*60*60*24))} days remaining</div>
+        <div style="font-size:11px;color:#f05252;margin-top:2px;font-weight:700;">${(function(){ var d = Math.ceil((new Date(plumber.trialEndDate) - new Date()) / (1000*60*60*24)); return d > 1 ? d + " days remaining" : d === 1 ? "1 day remaining" : d === 0 ? "Last day of trial" : "Trial ended"; })()}</div>
         <div style="font-size:12px;color:#6b84a0;">
           Ends ${plumber.trialEndDate ? new Date(plumber.trialEndDate).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "soon"}
         </div>
