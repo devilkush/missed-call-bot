@@ -149,12 +149,22 @@ async function sendDailySummaryEmail(db, db_helpers, emailService) {
 //   - Header: x-admin-secret
 //   - Query:  ?secret=YOUR_SECRET
 // ─────────────────────────────────────────────
+// Constant-time comparison - prevents timing attacks that guess
+// the secret one character at a time.
+function secretsMatch(a, b) {
+  if (!a || !b) return false;
+  const bufA = Buffer.from(String(a));
+  const bufB = Buffer.from(String(b));
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 function requireAdminAuth(req, res, next) {
   const secret =
     req.headers["x-admin-secret"] ||
     req.query.secret;
 
-  if (!secret || secret !== process.env.ADMIN_SECRET) {
+  if (!secretsMatch(secret, process.env.ADMIN_SECRET)) {
     return res.status(401).json({
       error: "Unauthorized",
       message: "Valid admin secret required",
