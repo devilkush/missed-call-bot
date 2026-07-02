@@ -250,16 +250,10 @@ function registerBillingRoutes(app, db, db_helpers, emailService) {
 
           // ── Invoice payment failed → flag account ──────────
           case "invoice.payment_failed": {
-        // Send payment failed email
-        try {
-          const failedCustomerId = event.data.object.customer;
-          const failedPlumber = await db.collection("plumbers").findOne({ stripeCustomerId: failedCustomerId });
-          if (failedPlumber) {
-            await emailService2.sendPaymentFailedEmail(failedPlumber);
-          }
-        } catch (e) {
-          console.error("Payment failed email error:", e.message);
-        }
+            // NOTE: only ONE payment-failed email is sent (the local
+            // sendPaymentFailedEmail below, which includes the billing
+            // portal link). A second emailService2 call used to live here
+            // and caused customers to receive two emails per failure.
             const invoice = event.data.object;
             const plumber = await db.collection("plumbers").findOne({
               stripeCustomerId: invoice.customer,
@@ -273,29 +267,21 @@ function registerBillingRoutes(app, db, db_helpers, emailService) {
 
           // ── Subscription cancelled → deactivate ───────────
           case "customer.subscription.deleted": {
-        // Schedule win-back email after 3 days using setTimeout
-        try {
-          const deletedCustomerId = event.data.object.customer;
-          const deletedPlumber = await db.collection("plumbers").findOne({ stripeCustomerId: deletedCustomerId });
-          if (deletedPlumber) {
-            setTimeout(async function() {
-              try {
-                const now = new Date();
-                const thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
-                const stats = await db_helpers.getStats(db, deletedPlumber.twilioNumber, thirtyDaysAgo, now);
-                const avgJob = deletedPlumber.averageJobValue || 250;
-                const enriched = Object.assign({}, stats, {
-                  estimatedRevenue: ((stats.leadsCaptures || 0) * avgJob).toLocaleString()
-                });
-                await emailService2.sendWinBackEmail(deletedPlumber, enriched);
-              } catch (e) {
-                console.error("Win-back email error:", e.message);
-              }
-            }, 3 * 24 * 60 * 60 * 1000); // 3 days
-          }
-        } catch (e) {
-          console.error("Win-back schedule error:", e.message);
-        }
+            // Schedule the win-back email by writing a due date to Mongo.
+            // The daily cron in scheduler.js picks it up and sends it.
+            // (This used to be a setTimeout, which was silently wiped every
+            // time Railway restarted or redeployed - most win-backs never sent.)
+            try {
+              const deletedCustomerId = event.data.object.customer;
+              const winBackDue = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000); // +3 days
+              await db.collection("plumbers").updateOne(
+                { stripeCustomerId: deletedCustomerId },
+                { $set: { winBackDueAt: winBackDue, winBackSent: false, updatedAt: new Date() } }
+              );
+              console.log(`📅 Win-back email scheduled for ${winBackDue.toISOString()}`);
+            } catch (e) {
+              console.error("Win-back schedule error:", e.message);
+            }
             const sub = event.data.object;
             const plumber = await db.collection("plumbers").findOne({
               stripeCustomerId: sub.customer,
