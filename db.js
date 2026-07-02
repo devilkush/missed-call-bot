@@ -447,6 +447,30 @@ async function ensureIndexes(db) {
   await db.collection("conversations").createIndex({ twilioNumber: 1, createdAt: -1 });
   await db.collection("conversations").createIndex({ leadCaptured: 1 });
 
+  // ── DATA RETENTION (privacy policy compliance) ──────────────
+  // privacy.html promises conversation data is auto-deleted after
+  // 12 months. This TTL index makes MongoDB enforce that promise.
+  // If an old non-TTL index blocks creation, we recreate it.
+  const TWELVE_MONTHS = 365 * 24 * 60 * 60; // seconds
+  try {
+    await db.collection("conversations").createIndex(
+      { updatedAt: 1 },
+      { expireAfterSeconds: TWELVE_MONTHS, name: "retention_ttl" }
+    );
+  } catch (e) {
+    if (e.codeName === "IndexOptionsConflict") {
+      await db.collection("conversations").dropIndex("retention_ttl");
+      await db.collection("conversations").createIndex(
+        { updatedAt: 1 },
+        { expireAfterSeconds: TWELVE_MONTHS, name: "retention_ttl" }
+      );
+    } else {
+      console.error("⚠️ Retention TTL index failed:", e.message);
+    }
+  }
+  // Opt-out records are kept indefinitely on purpose - carriers
+  // require STOP lists to persist even after data cleanup.
+
   // optouts
   await db.collection("optouts").createIndex({ twilioNumber: 1, callerNumber: 1 }, { unique: true });
   await db.collection("optouts").createIndex({ active: 1 });
