@@ -17,6 +17,19 @@ const { registerBillingRoutes } = require("./billing");
 
 const app = express();
 
+// Railway sits behind a proxy - needed so Twilio signature validation
+// sees the real https:// URL instead of the internal http:// one.
+app.set("trust proxy", true);
+
+// ─────────────────────────────────────────────
+// TWILIO WEBHOOK SIGNATURE VALIDATION
+// Rejects any request to /voice, /missed-call or /incoming-sms
+// that wasn't genuinely signed by Twilio with our auth token.
+// Stops strangers POSTing fake payloads that cost us SMS + OpenAI money.
+// Requires TWILIO_AUTH_TOKEN to be the correct 32-char token in Railway.
+// ─────────────────────────────────────────────
+const validateTwilio = twilio.webhook({ validate: true });
+
 // ─────────────────────────────────────────────
 // CORS - allow requests from zeromisscall.com
 // ─────────────────────────────────────────────
@@ -164,7 +177,7 @@ async function sendSMS(to, from, body) {
 // ─────────────────────────────────────────────
 // WEBHOOK 1: /voice
 // ─────────────────────────────────────────────
-app.post("/voice", async (req, res) => {
+app.post("/voice", validateTwilio, async (req, res) => {
   const twilioNumber = req.body.To;
   const plumber = await db_helpers.getPlumberByTwilioNumber(db, twilioNumber);
   const businessName = plumber ? plumber.businessName : "us";
@@ -187,7 +200,7 @@ app.post("/voice", async (req, res) => {
 // ─────────────────────────────────────────────
 // WEBHOOK 2: /missed-call
 // ─────────────────────────────────────────────
-app.post("/missed-call", async (req, res) => {
+app.post("/missed-call", validateTwilio, async (req, res) => {
   const callerNumber = req.body.From;
   const twilioNumber = req.body.To;
   const callStatus   = req.body.CallStatus;
@@ -252,7 +265,7 @@ app.post("/missed-call", async (req, res) => {
 // ─────────────────────────────────────────────
 // WEBHOOK 3: /incoming-sms
 // ─────────────────────────────────────────────
-app.post("/incoming-sms", async (req, res) => {
+app.post("/incoming-sms", validateTwilio, async (req, res) => {
   const callerNumber = req.body.From;
   const twilioNumber = req.body.To;
   const incomingText = req.body.Body?.trim();
@@ -282,17 +295,9 @@ app.post("/incoming-sms", async (req, res) => {
   );
   if (blocked) return;
 
-  const limitCheck = ratelimit.checkRateLimit(twilioNumber, callerNumber);
-  if (limitCheck.limited) {
-    console.log(`⚠️  RATE LIMITED: ${callerNumber} | Reason: ${limitCheck.reason}`);
-    try {
-      await sendSMS(callerNumber, twilioNumber, ratelimit.getRateLimitReply(plumber));
-    } catch (err) {
-      console.error("❌ Failed to send rate limit reply:", err.message);
-    }
-    return;
-  }
-
+  // ── EMERGENCY DETECTION - must run BEFORE the rate limit ──
+  // If a customer hits their daily cap and THEN texts "pipe burst,
+  // water everywhere", the owner must still be alerted immediately.
   const emergency = isEmergency(incomingText);
   if (emergency && plumber.ownerPhone) {
     console.log(`🚨 EMERGENCY detected from ${callerNumber}`);
@@ -305,6 +310,24 @@ app.post("/incoming-sms", async (req, res) => {
     } catch (alertErr) {
       console.error("❌ Failed to send emergency alert:", alertErr.message);
     }
+  }
+
+  const limitCheck = ratelimit.checkRateLimit(twilioNumber, callerNumber);
+  if (limitCheck.limited) {
+    console.log(`⚠️  RATE LIMITED: ${callerNumber} | Reason: ${limitCheck.reason}`);
+    try {
+      // For emergencies, tell the customer the owner has been alerted
+      // instead of the generic "we have everything we need" line.
+      const reply = emergency
+        ? `${plumber.ownerName} has been alerted about your emergency and will call you right back. If water is involved, shut off the main stop valve now.`
+        : ratelimit.getRateLimitReply(plumber);
+      await sendSMS(callerNumber, twilioNumber, reply);
+    } catch (err) {
+      console.error("❌ Failed to send rate limit reply:", err.message);
+    }
+    // Still save the message so the emergency shows in the dashboard
+    await db_helpers.saveMessage(db, twilioNumber, callerNumber, "user", incomingText, { emergency });
+    return;
   }
 
   await db_helpers.saveMessage(db, twilioNumber, callerNumber, "user", incomingText, { emergency });
@@ -391,13 +414,34 @@ app.get("/test-emails", async (req, res) => {
 // CONTACT FORM - website enquiries
 // POST /contact
 // ─────────────────────────────────────────────
-app.post("/contact", async (req, res) => {
-  const { firstName, lastName, email, business, topic, message } = req.body || {};
+function escapeHtml(str) {
+  return String(str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 
-  // Basic validation
-  if (!firstName || !email || !message) {
+app.post("/contact", async (req, res) => {
+  const body = req.body || {};
+
+  // Basic validation on raw values
+  if (!body.firstName || !body.email || !body.message) {
     return res.status(400).json({ error: "Missing required fields." });
   }
+  // Reject header-injection attempts in the reply-to address
+  if (/[\r\n]/.test(body.email) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)) {
+    return res.status(400).json({ error: "Invalid email address." });
+  }
+
+  // Escape everything user-supplied before it touches HTML
+  const firstName = escapeHtml(body.firstName);
+  const lastName  = escapeHtml(body.lastName);
+  const email     = escapeHtml(body.email);
+  const business  = escapeHtml(body.business);
+  const topic     = escapeHtml(body.topic).substring(0, 120);
+  const message   = escapeHtml(body.message).substring(0, 5000);
 
   const name = `${firstName || ""} ${lastName || ""}`.trim();
 
