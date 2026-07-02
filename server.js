@@ -195,9 +195,14 @@ app.post("/missed-call", async (req, res) => {
 
   console.log(`📞 ${callStatus} | From: ${callerNumber} | To: ${twilioNumber} | SID: ${callSid}`);
 
-  const missedStatuses = ["no-answer", "busy", "failed", "canceled"];
+  // In the call-forwarding model, a call that reaches this Twilio number has
+  // already gone unanswered on the plumber's phone (conditional forwarding),
+  // then our /voice greeting plays and hangs up — which Twilio marks as
+  // "completed". So "completed" is a genuine missed call here and must trigger
+  // the text-back, alongside the direct no-answer/busy/failed/canceled cases.
+  const missedStatuses = ["no-answer", "busy", "failed", "canceled", "completed"];
   if (!missedStatuses.includes(callStatus)) {
-    return res.status(200).send("Call was answered - no action needed.");
+    return res.status(200).send("Status not actionable - no action needed.");
   }
 
   if (callSid && isDuplicate(callSid)) {
