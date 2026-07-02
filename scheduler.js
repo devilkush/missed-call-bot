@@ -407,6 +407,40 @@ function initScheduler(app, db, db_helpers, emailService) {
     }
   }, { timezone: "UTC" });
 
+  // ─── WIN-BACK EMAILS - 10:00 AM UTC daily ─────────────────
+  // Sends the win-back email to cancelled customers whose
+  // winBackDueAt (set by the Stripe webhook in billing.js) has
+  // passed. Survives restarts, sends each one exactly once.
+  cron.schedule("0 10 * * *", async () => {
+    try {
+      var due = await db.collection("plumbers").find({
+        winBackDueAt: { $lte: new Date() },
+        winBackSent: { $ne: true },
+        subscriptionStatus: "cancelled",
+      }).toArray();
+
+      for (var i = 0; i < due.length; i++) {
+        var plumber = due[i];
+        try {
+          var now = new Date();
+          var thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
+          var stats = await db_helpers.getStats(db, plumber.twilioNumber, thirtyDaysAgo, now);
+          var avgJob = plumber.averageJobValue || 250;
+          var enriched = Object.assign({}, stats, {
+            estimatedRevenue: ((stats.leadsCaptures || 0) * avgJob).toLocaleString(),
+          });
+          await emailService2.sendWinBackEmail(plumber, enriched);
+          await db_helpers.updatePlumber(db, plumber.twilioNumber, { winBackSent: true });
+          console.log("Win-back email sent to " + plumber.businessName);
+        } catch (e) {
+          console.error("Win-back send failed for " + plumber.businessName + ":", e.message);
+        }
+      }
+    } catch (err) {
+      console.error("Win-back cron error:", err.message);
+    }
+  }, { timezone: "UTC" });
+
   // ─── DAILY SUMMARY TO IAN - 8:00 AM UTC ──────────────────
   cron.schedule("0 8 * * *", async () => {
     try {
