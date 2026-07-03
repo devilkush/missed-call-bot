@@ -102,12 +102,23 @@ var MAX_CSV_ROWS = 2000;
 // ─────────────────────────────────────────────
 // AUTH MIDDLEWARE (same pattern as admin.js)
 // ─────────────────────────────────────────────
+const crypto = require("crypto");
+
+// Constant-time comparison - same hardening as admin.js
+function secretsMatch(a, b) {
+  if (!a || !b) return false;
+  var bufA = Buffer.from(String(a));
+  var bufB = Buffer.from(String(b));
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 function requireAdminAuth(req, res, next) {
   const secret =
     req.headers["x-admin-secret"] ||
     req.query.secret;
 
-  if (!secret || secret !== process.env.ADMIN_SECRET) {
+  if (!secretsMatch(secret, process.env.ADMIN_SECRET)) {
     return res.status(401).json({
       error: "Unauthorized",
       message: "Valid admin secret required",
@@ -720,6 +731,14 @@ function buildSalesDashboardHtml(leads, imports) {
     "if(note===null)return;" +
     "if(note.trim())body.note=note.trim();" +
     "}" +
+    "if(outcome==='no_answer'||outcome==='voicemail'||outcome==='spoke'){" +
+    "var cb=prompt('Call back in how many hours? (e.g. 4, 24, 72 - blank for none)');" +
+    "if(cb!==null&&cb.trim()!==''){" +
+    "var h=parseFloat(cb);" +
+    "if(isFinite(h)&&h>=0.5&&h<=720){body.callbackHours=h;}" +
+    "else{alert('Callback ignored - enter a number between 0.5 and 720 hours.');}" +
+    "}" +
+    "}" +
     "if(outcome==='interested'){" +
     "var useEmail=email;" +
     "if(!useEmail){" +
@@ -1030,7 +1049,7 @@ function registerSalesRoutes(app, db, db_helpers, emailService) {
 
   // ── SALES DASHBOARD PAGE ──────────────────────────────────
   app.get("/admin/sales", async (req, res) => {
-    if (req.query.secret !== process.env.ADMIN_SECRET) {
+    if (!secretsMatch(req.query.secret, process.env.ADMIN_SECRET)) {
       return res.status(401).send("Unauthorized");
     }
     try {
@@ -1273,10 +1292,19 @@ function registerSalesRoutes(app, db, db_helpers, emailService) {
       const now = new Date();
       const note = req.body.note && String(req.body.note).trim() ? String(req.body.note).trim() : null;
 
+      // Optional follow-up: "call back in N hours" scheduled in the same
+      // action as logging the call (used to require a separate Edit).
+      // Valid range 0.5h - 720h (30 days). Anything else = no callback.
+      var callbackAt = null;
+      var cbHours = Number(req.body.callbackHours);
+      if (isFinite(cbHours) && cbHours >= 0.5 && cbHours <= 720) {
+        callbackAt = new Date(now.getTime() + cbHours * 60 * 60 * 1000);
+      }
+
       const setOps = {
         stage: outcomeMeta.stage,
         updatedAt: now,
-        callbackAt: null, // a logged call consumes any scheduled callback
+        callbackAt: callbackAt, // null consumes any old callback; a value schedules the next one
       };
       const pushOps = {
         callAttempts: { at: now, outcome: outcome, note: note },
