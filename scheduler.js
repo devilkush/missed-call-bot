@@ -27,6 +27,10 @@ const cron = require("node-cron");
 const { sendDailySummaryEmail } = require("./admin");
 const emailService2 = require("./email2");
 
+// Used by the daily summary SMS cron below.
+const twilio = require("twilio");
+const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+
 // ─────────────────────────────────────────────
 // HELPER - get month name
 // ─────────────────────────────────────────────
@@ -404,6 +408,73 @@ function initScheduler(app, db, db_helpers, emailService) {
       }
     } catch (err) {
       console.error("Forwarding nudge error:", err.message);
+    }
+  }, { timezone: "UTC" });
+
+  // ─── DAILY SUMMARY SMS - 6:00 PM in each plumber's LOCAL time ──
+  // Runs every hour on the hour. For each active plumber we work out what
+  // hour it currently is in HIS timezone, and only send when that's 18:00.
+  // That way one cron covers every US timezone correctly, including DST.
+  // Nothing is sent on days with zero missed calls - a daily "nothing
+  // happened" text just trains people to ignore us.
+  cron.schedule("0 * * * *", async () => {
+    try {
+      var plumbers = await db_helpers.getAllActivePlumbers(db);
+
+      for (var i = 0; i < plumbers.length; i++) {
+        var plumber = plumbers[i];
+        if (!plumber.ownerPhone || !plumber.twilioNumber) continue;
+
+        var tz = plumber.timezone || "America/Chicago";
+
+        // What hour is it right now where this plumber is?
+        var localHour;
+        try {
+          localHour = Number(new Intl.DateTimeFormat("en-US", {
+            timeZone: tz, hour: "numeric", hour12: false,
+          }).format(new Date()));
+        } catch (tzErr) {
+          console.error("Bad timezone for " + plumber.businessName + ": " + tz);
+          continue;
+        }
+        if (localHour !== 18) continue;
+
+        try {
+          // Today so far, in his local day
+          var now = new Date();
+          var startOfDay = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+          var stats = await db_helpers.getStats(db, plumber.twilioNumber, startOfDay, now);
+
+          var missed = stats.totalConversations || 0;
+          if (missed === 0) continue; // quiet day - stay quiet
+
+          var leads = stats.leadsCaptures || 0;
+
+          // Leads he hasn't marked as won/lost yet still need a callback
+          var recovered = await db_helpers.getRecoveredTotals(db, plumber.twilioNumber, startOfDay, now);
+          var pending = recovered.unmarked || 0;
+
+          var body =
+            "ZeroMissCall - today: " + missed + " missed call" + (missed === 1 ? "" : "s") +
+            ", " + leads + " lead" + (leads === 1 ? "" : "s") + " captured.";
+          if (pending > 0) {
+            body += " " + pending + " still need" + (pending === 1 ? "s" : "") + " a callback.";
+          }
+          body += " " + (process.env.APP_URL || "https://zeromisscall.com") +
+                  "/dashboard/" + plumber.dashboardToken;
+
+          await twilioClient.messages.create({
+            to:   plumber.ownerPhone,
+            from: plumber.twilioNumber,
+            body: body,
+          });
+          console.log("Daily summary SMS sent to " + plumber.businessName);
+        } catch (e) {
+          console.error("Daily summary failed for " + plumber.businessName + ":", e.message);
+        }
+      }
+    } catch (err) {
+      console.error("Daily summary cron error:", err.message);
     }
   }, { timezone: "UTC" });
 
