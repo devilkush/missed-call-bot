@@ -6,6 +6,35 @@ function buildDashboardHtml(plumber, stats, conversations) {
   const now = new Date();
   const monthName = now.toLocaleString("en-US", { month: "long", year: "numeric" });
 
+  // ── Jobs Recovered ledger row (only on captured leads) ──
+  // Unmarked -> ask. Marked -> show the result. One tap for the common case;
+  // the value defaults to the plumber's average job value and can be edited.
+  function outcomeRow(convo, plumber) {
+    const avg = plumber.averageJobValue || 250;
+
+    if (convo.jobOutcome === "won") {
+      return `<div style="margin-top:10px;display:inline-flex;align-items:center;gap:6px;background:rgba(62,207,142,0.12);border:1px solid rgba(62,207,142,0.3);color:#3ecf8e;padding:5px 12px;border-radius:100px;font-size:12px;font-weight:700;">
+        &#10003; Job won &middot; $${(convo.jobValue || 0).toLocaleString()}
+      </div>`;
+    }
+    if (convo.jobOutcome === "lost") {
+      return `<div style="margin-top:10px;display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);color:#6b84a0;padding:5px 12px;border-radius:100px;font-size:12px;">
+        Didn't book
+      </div>`;
+    }
+
+    // Not yet marked - prompt the owner.
+    const cn = String(convo.callerNumber).replace(/'/g, "");
+    return `<div onclick="event.stopPropagation();" style="margin-top:12px;background:rgba(232,121,26,0.07);border:1px solid rgba(232,121,26,0.22);border-radius:12px;padding:10px 12px;">
+      <div style="font-size:12px;color:#f5c898;margin-bottom:8px;font-weight:600;">Did this become a job?</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <button onclick="markOutcome('${cn}','won',${avg})" style="background:#3ecf8e;color:#04220f;border:none;padding:7px 14px;border-radius:8px;font-size:12px;font-weight:800;cursor:pointer;">Yes &middot; $${avg}</button>
+        <button onclick="markOutcomeCustom('${cn}',${avg})" style="background:transparent;color:#96aec6;border:1px solid rgba(255,255,255,0.15);padding:7px 12px;border-radius:8px;font-size:12px;cursor:pointer;">Yes, different amount</button>
+        <button onclick="markOutcome('${cn}','lost',0)" style="background:transparent;color:#6b84a0;border:1px solid rgba(255,255,255,0.12);padding:7px 12px;border-radius:8px;font-size:12px;cursor:pointer;">No</button>
+      </div>
+    </div>`;
+  }
+
   const conversationCards = conversations.map((convo, index) => {
     const isEmergency = convo.emergency;
     const isLead      = convo.leadCaptured;
@@ -43,6 +72,8 @@ function buildDashboardHtml(plumber, stats, conversations) {
             <div style="font-size:12px;color:#6b84a0;margin-bottom:6px;">${date} &middot; ${msgCount} messages</div>
             ${convo.jobDescription ? `<div style="font-size:12px;color:#96aec6;">${convo.jobDescription}</div>` : ""}
             ${convo.callerZip ? `<div style="font-size:12px;color:#96aec6;">Zip: ${convo.callerZip}</div>` : ""}
+            ${convo.preferredTime ? `<div style="font-size:12px;color:#96aec6;">Prefers: ${convo.preferredTime}</div>` : ""}
+            ${isLead ? outcomeRow(convo, plumber) : ""}
           </div>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0;">
             ${statusBadge}
@@ -145,7 +176,7 @@ function buildDashboardHtml(plumber, stats, conversations) {
 
       <div style="background:linear-gradient(135deg,rgba(232,121,26,0.08),rgba(15,32,53,0.4));border:1px solid rgba(232,121,26,0.22);border-radius:16px;padding:18px 14px;text-align:center;">
         <div style="font-family:'Nunito',sans-serif;font-size:32px;font-weight:900;color:#fff;letter-spacing:-1.5px;line-height:1;">$${stats.estimatedRevenue || 0}</div>
-        <div style="font-size:11px;color:#6b84a0;margin-top:5px;line-height:1.4;font-weight:500;">Est. Revenue<br/>Recovered</div>
+        <div style="font-size:11px;color:${stats.revenueConfirmed ? "#3ecf8e" : "#6b84a0"};margin-top:5px;line-height:1.4;font-weight:500;">${stats.revenueConfirmed ? `Revenue Recovered<br/>${stats.jobsWon} job${stats.jobsWon === 1 ? "" : "s"} confirmed` : "Est. Revenue<br/>Recovered"}</div>
       </div>
 
       <div style="background:rgba(255,255,255,0.038);border:1px solid ${(stats.emergencies || 0) > 0 ? "rgba(240,82,82,0.3)" : "rgba(255,255,255,0.07)"};border-radius:16px;padding:18px 14px;text-align:center;">
@@ -435,6 +466,29 @@ function buildDashboardHtml(plumber, stats, conversations) {
       });
     }
 
+    // ── JOBS RECOVERED LEDGER ─────────────────────────────────
+    function markOutcome(callerNumber, outcome, jobValue) {
+      fetch(window.location.pathname + '/outcome', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callerNumber: callerNumber, outcome: outcome, jobValue: jobValue })
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.ok) { window.location.reload(); }
+        else { alert('Could not save. Please try again.'); }
+      })
+      .catch(function() { alert('Could not save. Please try again.'); });
+    }
+
+    function markOutcomeCustom(callerNumber, avg) {
+      var v = prompt('What was this job worth? (US dollars)', avg);
+      if (v === null) return;
+      var n = parseFloat(String(v).replace(/[^0-9.]/g, ''));
+      if (!isFinite(n) || n < 0) { alert('Enter a number, e.g. 340'); return; }
+      markOutcome(callerNumber, 'won', n);
+    }
+
     // ── AUTO-REFRESH ──────────────────────────────────────────
     // Reloads every 60s so new missed calls / leads appear without
     // manual refresh. Skips the reload if the plumber has a
@@ -481,6 +535,39 @@ function registerDashboardRoute(app, db, db_helpers) {
   });
 
 
+
+  // ── Jobs Recovered: mark a lead won or lost ───────────────────────────────
+  app.post("/dashboard/:token/outcome", async (req, res) => {
+    try {
+      var plumber = await db_helpers.getPlumberByToken(db, req.params.token);
+      if (!plumber) return res.status(404).json({ error: "Not found" });
+
+      var callerNumber = req.body.callerNumber;
+      var outcome      = req.body.outcome;
+
+      if (!callerNumber || (outcome !== "won" && outcome !== "lost")) {
+        return res.status(400).json({ error: "Missing callerNumber or invalid outcome" });
+      }
+
+      // Default a won job to the plumber's average job value; allow an override.
+      var value = 0;
+      if (outcome === "won") {
+        value = req.body.jobValue !== undefined && req.body.jobValue !== ""
+          ? Number(req.body.jobValue)
+          : (plumber.averageJobValue || 250);
+        if (!isFinite(value) || value < 0 || value > 1000000) {
+          return res.status(400).json({ error: "Invalid job value" });
+        }
+      }
+
+      await db_helpers.markJobOutcome(db, plumber.twilioNumber, callerNumber, outcome, value);
+      console.log("Job marked " + outcome + " for " + plumber.businessName + " (" + callerNumber + ")");
+      res.json({ ok: true, outcome: outcome, jobValue: value });
+    } catch (err) {
+      console.error("Outcome update error:", err.message);
+      res.status(500).json({ error: "Failed to save outcome" });
+    }
+  });
 
   // ── Manual reply from dashboard ───────────────────────────────────────────
   app.post("/dashboard/:token/reply", async (req, res) => {
@@ -535,8 +622,23 @@ function registerDashboardRoute(app, db, db_helpers) {
       const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
       const stats = await db_helpers.getStats(db, plumber.twilioNumber, startOfMonth, now);
       const avgJobValue = plumber.averageJobValue || 250;
-      const estimatedRevenue = ((stats.leadsCaptures || 0) * avgJobValue).toLocaleString();
-      const enrichedStats = { ...stats, estimatedRevenue };
+
+      // Jobs Recovered ledger: once the owner starts marking leads won/lost we
+      // show CONFIRMED revenue (real money he told us about) instead of an
+      // estimate. Confirmed numbers are far more persuasive at trial end.
+      const recovered = await db_helpers.getRecoveredTotals(db, plumber.twilioNumber, startOfMonth, now);
+      const hasConfirmed = recovered.won > 0;
+
+      const estimatedRevenue = hasConfirmed
+        ? recovered.revenue.toLocaleString()
+        : ((stats.leadsCaptures || 0) * avgJobValue).toLocaleString();
+
+      const enrichedStats = {
+        ...stats,
+        estimatedRevenue,
+        revenueConfirmed: hasConfirmed,
+        jobsWon: recovered.won,
+      };
       const conversations = await db_helpers.getRecentConversations(db, plumber.twilioNumber, 20);
 
       // Pin what matters: emergencies first, then captured leads,
