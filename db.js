@@ -74,6 +74,12 @@
 
   // ── NEW fields ────────────────────────────────────
   leadCaptured:         false,   // true when AI has got problem + zip + time
+
+  // ── Jobs Recovered ledger ──
+  // Set by the owner from the dashboard after he calls the lead back.
+  jobOutcome:           null,    // "won" | "lost" | null (not yet marked)
+  jobValue:             0,       // USD, defaults to plumber.averageJobValue on "won"
+  outcomeMarkedAt:      null,    // Date the owner marked it
   leadNotifiedAt:       ISODate, // when the structured lead alert was sent to plumber
   jobDescription:       "",      // extracted from conversation
   callerZip:            "",      // extracted from conversation
@@ -478,7 +484,48 @@ async function ensureIndexes(db) {
   console.log("✅ MongoDB indexes ensured");
 }
 
+// ─────────────────────────────────────────────
+// JOBS RECOVERED LEDGER
+// Owner marks a captured lead as won or lost after calling back.
+// outcome: "won" | "lost". value only used when won.
+// ─────────────────────────────────────────────
+async function markJobOutcome(db, twilioNumber, callerNumber, outcome, value) {
+  if (!db) return null;
+  if (outcome !== "won" && outcome !== "lost") return null;
+
+  const set = {
+    jobOutcome:      outcome,
+    outcomeMarkedAt: new Date(),
+    updatedAt:       new Date(),
+    jobValue:        outcome === "won" ? Math.max(0, Number(value) || 0) : 0,
+  };
+
+  return db.collection("conversations").updateOne(
+    { twilioNumber, callerNumber, leadCaptured: true },
+    { $set: set }
+  );
+}
+
+// Totals for the ledger: how many leads became jobs, and what they were worth.
+async function getRecoveredTotals(db, twilioNumber, fromDate, toDate) {
+  if (!db) return { won: 0, lost: 0, unmarked: 0, revenue: 0 };
+
+  const query = { twilioNumber, leadCaptured: true };
+  if (fromDate && toDate) query.createdAt = { $gte: fromDate, $lte: toDate };
+
+  const leads = await db.collection("conversations").find(query).toArray();
+
+  return {
+    won:      leads.filter(l => l.jobOutcome === "won").length,
+    lost:     leads.filter(l => l.jobOutcome === "lost").length,
+    unmarked: leads.filter(l => !l.jobOutcome).length,
+    revenue:  leads.reduce((sum, l) => sum + (l.jobOutcome === "won" ? (l.jobValue || 0) : 0), 0),
+  };
+}
+
 module.exports = {
+  markJobOutcome,
+  getRecoveredTotals,
   getPlumberByTwilioNumber,
   createPlumber,
   updatePlumber,
