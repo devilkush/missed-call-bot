@@ -183,6 +183,37 @@ async function sendSMS(to, from, body) {
 }
 
 // ─────────────────────────────────────────────
+// SHARED: send the opening text-back (used after IVR consent)
+// Honors opt-out, saves to history, alerts the owner. Returns true if sent.
+// ─────────────────────────────────────────────
+async function sendOpeningTextBack(plumber, twilioNumber, callerNumber) {
+  const openingMessage =
+    `Hey! Thanks for calling ${plumber.businessName} - sorry we missed you, ` +
+    `we're probably out on a job. I can help you right now over text. What do you need? ` +
+    `Reply STOP to opt out, HELP for help. Msg & data rates may apply.`;
+
+  const blocked = await optout.isBlockedFromSending(
+    db_helpers, db, twilioNumber, callerNumber
+  );
+  if (blocked) {
+    console.log(`🚫 Skipping opening text - ${callerNumber} has opted out.`);
+    return false;
+  }
+
+  await sendSMS(callerNumber, twilioNumber, openingMessage);
+  await db_helpers.saveMessage(db, twilioNumber, callerNumber, "assistant", openingMessage);
+
+  if (plumber.ownerPhone) {
+    await sendSMS(
+      plumber.ownerPhone,
+      twilioNumber,
+      `📞 Missed call from ${callerNumber}. They opted in - auto-reply sent, conversation started.`
+    );
+  }
+  return true;
+}
+
+// ─────────────────────────────────────────────
 // WEBHOOK 1: /voice
 // ─────────────────────────────────────────────
 app.post("/voice", validateTwilio, async (req, res) => {
@@ -194,11 +225,74 @@ app.post("/voice", validateTwilio, async (req, res) => {
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const twiml = new VoiceResponse();
 
-  twiml.say(
+  // IVR consent: caller must press 1 to opt in to text messages.
+  // This is an affirmative, logged opt-in - the strongest consent basis.
+  const gather = twiml.gather({
+    numDigits: 1,
+    action: "/voice-consent",
+    method: "POST",
+    timeout: 6,
+  });
+
+  gather.say(
     { voice: "Polly.Joanna-Neural" },
     `Hey, thanks for calling ${businessName}! ${ownerName} is probably out on a job right now. ` +
-      `We're sending you a text right now so we can get you sorted fast. Talk soon!`
+      `To get help by text, press 1 to receive text messages about your enquiry from ${businessName}. ` +
+      `Message frequency varies, message and data rates may apply, and you can reply STOP at any time to opt out. ` +
+      `To decline, press 2 or simply hang up.`
   );
+
+  // If they press nothing (timeout), Twilio falls through to here:
+  // no consent captured, so no text is sent. Say goodbye and hang up.
+  twiml.say(
+    { voice: "Polly.Joanna-Neural" },
+    `No problem. ${ownerName} will see the missed call and get back to you. Goodbye.`
+  );
+  twiml.hangup();
+
+  res.type("text/xml");
+  res.send(twiml.toString());
+});
+
+// ─────────────────────────────────────────────
+// WEBHOOK 1b: /voice-consent  (handles the keypress from /voice)
+// Press 1 = opt in -> record consent, send the text-back.
+// Press 2 / anything else = decline -> no message sent.
+// ─────────────────────────────────────────────
+app.post("/voice-consent", validateTwilio, async (req, res) => {
+  const twilioNumber = req.body.To;
+  const callerNumber = req.body.From;
+  const digit        = req.body.Digits;
+
+  const plumber = await db_helpers.getPlumberByTwilioNumber(db, twilioNumber);
+  const businessName = plumber ? plumber.businessName : "us";
+  const ownerName    = plumber ? plumber.ownerName    : "the team";
+
+  const VoiceResponse = twilio.twiml.VoiceResponse;
+  const twiml = new VoiceResponse();
+
+  if (digit === "1" && plumber) {
+    // Affirmative opt-in. Record it (timestamped, tied to the number) as
+    // proof of consent, then trigger the text-back.
+    try {
+      await db_helpers.recordConsent(db, twilioNumber, callerNumber, "ivr_press_1");
+      await sendOpeningTextBack(plumber, twilioNumber, callerNumber);
+      console.log(`✅ IVR consent (press 1) from ${callerNumber} - text-back sent`);
+    } catch (err) {
+      console.error("❌ Error after IVR consent:", err.message);
+    }
+    twiml.say(
+      { voice: "Polly.Joanna-Neural" },
+      `Great! We've just sent you a text. Reply to it and we'll help you get sorted. Talk soon!`
+    );
+  } else {
+    // Declined (pressed 2 or something else). No message is sent.
+    console.log(`🚫 IVR consent declined by ${callerNumber} (pressed ${digit || "nothing"})`);
+    twiml.say(
+      { voice: "Polly.Joanna-Neural" },
+      `No problem. ${ownerName} will see the missed call and get back to you. Goodbye.`
+    );
+  }
 
   twiml.hangup();
   res.type("text/xml");
@@ -237,35 +331,23 @@ app.post("/missed-call", validateTwilio, async (req, res) => {
     return res.status(200).send("No config found.");
   }
 
-  const openingMessage =
-    `Hey! Thanks for calling ${plumber.businessName} - sorry we missed you, ` +
-    `we're probably out on a job. I can help you right now over text. What do you need? ` +
-    `Reply STOP to opt out, HELP for help. Msg & data rates may apply.`;
-
+  // NOTE: The customer text-back is NO LONGER sent from here. Consent is now
+  // captured via the IVR press-1 flow in /voice-consent, which sends the
+  // opening text only after the caller affirmatively opts in. This endpoint
+  // just alerts the owner that a call came in, so they never miss a lead
+  // even if the caller declined the text.
   try {
-    const blocked = await optout.isBlockedFromSending(
-      db_helpers, db, twilioNumber, callerNumber
-    );
-    if (blocked) {
-      console.log(`🚫 Skipping opening text - ${callerNumber} has opted out.`);
-      return res.status(200).send("Opted out - no message sent.");
-    }
-
-    await sendSMS(callerNumber, twilioNumber, openingMessage);
-    await db_helpers.saveMessage(db, twilioNumber, callerNumber, "assistant", openingMessage);
-
     if (plumber.ownerPhone) {
       await sendSMS(
         plumber.ownerPhone,
         twilioNumber,
-        `📞 Missed call from ${callerNumber}. Auto-reply sent - conversation started.`
+        `📞 Missed call from ${callerNumber}. If they opted in by phone, a text conversation has started - check your dashboard.`
       );
     }
-
-    console.log(`✅ Opening text sent to ${callerNumber}`);
+    console.log(`📞 Missed-call owner alert sent for ${callerNumber}`);
     res.status(200).send("OK");
   } catch (err) {
-    console.error("❌ Error sending opening message:", err.message);
+    console.error("❌ Error sending owner alert:", err.message);
     res.status(500).send("Error");
   }
 });
