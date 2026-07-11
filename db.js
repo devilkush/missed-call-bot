@@ -283,6 +283,26 @@ async function recordOptOut(db, twilioNumber, callerNumber) {
   );
 }
 
+// ── Record an affirmative consent event (IVR press-1 opt-in) ──
+// Stored as a permanent, timestamped proof of consent per number, and
+// stamped on the conversation so it shows in the dashboard / audit trail.
+async function recordConsent(db, twilioNumber, callerNumber, method) {
+  if (!db) return;
+  const now = new Date();
+  await db.collection("consents").updateOne(
+    { twilioNumber, callerNumber },
+    {
+      $set: { method: method || "ivr_press_1", consentedAt: now, updatedAt: now },
+      $setOnInsert: { createdAt: now },
+    },
+    { upsert: true }
+  );
+  await db.collection("conversations").updateMany(
+    { twilioNumber, callerNumber },
+    { $set: { consentMethod: method || "ivr_press_1", consentedAt: now } }
+  );
+}
+
 // ── Record a resubscribe (START) ──
 async function recordResubscribe(db, twilioNumber, callerNumber) {
   if (!db) return;
@@ -480,6 +500,7 @@ async function ensureIndexes(db) {
   // optouts
   await db.collection("optouts").createIndex({ twilioNumber: 1, callerNumber: 1 }, { unique: true });
   await db.collection("optouts").createIndex({ active: 1 });
+  await db.collection("consents").createIndex({ twilioNumber: 1, callerNumber: 1 }, { unique: true });
 
   console.log("✅ MongoDB indexes ensured");
 }
@@ -534,6 +555,7 @@ module.exports = {
   isOptedOut,
   recordOptOut,
   recordResubscribe,
+  recordConsent,
   getStats,
   getTrialEndingTomorrow,
   getActiveForWeeklyDigest,
