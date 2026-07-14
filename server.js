@@ -216,6 +216,18 @@ async function sendOpeningTextBack(plumber, twilioNumber, callerNumber) {
 // ─────────────────────────────────────────────
 // WEBHOOK 1: /voice
 // ─────────────────────────────────────────────
+
+// Greeting voice. Amazon Polly neural voices - change this one line to swap.
+// Options: Polly.Danielle-Neural (warm US female), Polly.Matthew-Neural (warm
+// US male), Polly.Stephen-Neural (casual US male), Polly.Joanna-Neural.
+const CALL_VOICE = "Polly.Danielle-Neural";
+
+// Wrap text in light SSML so it sounds human, not rushed: small pauses after
+// sentences and around the "press 1" instruction, and a slightly calmer rate.
+function humanSpeech(text) {
+  return `<speak><prosody rate="96%">${text}</prosody></speak>`;
+}
+
 app.post("/voice", validateTwilio, async (req, res) => {
   const twilioNumber = req.body.To;
   const plumber = await db_helpers.getPlumberByTwilioNumber(db, twilioNumber);
@@ -235,18 +247,21 @@ app.post("/voice", validateTwilio, async (req, res) => {
   });
 
   gather.say(
-    { voice: "Polly.Joanna-Neural" },
-    `Hey, thanks for calling ${businessName}! ${ownerName} is probably out on a job right now. ` +
-      `To get help by text, press 1 to receive text messages about your enquiry from ${businessName}. ` +
-      `Message frequency varies, message and data rates may apply, and you can reply STOP at any time to opt out. ` +
-      `To decline, press 2 or simply hang up.`
+    { voice: CALL_VOICE },
+    humanSpeech(
+      `Hey! Thanks for calling ${businessName}. <break time="300ms"/> ` +
+      `${ownerName}'s probably out on a job right now, <break time="200ms"/> but I can help. <break time="400ms"/> ` +
+      `To get help by text, <break time="150ms"/> just press one, <break time="150ms"/> and I'll text you right back about what you need. <break time="400ms"/> ` +
+      `Message frequency varies, and message and data rates may apply. <break time="150ms"/> You can reply STOP any time to opt out. <break time="400ms"/> ` +
+      `Or to skip the text, <break time="150ms"/> press two, or just hang up.`
+    )
   );
 
   // If they press nothing (timeout), Twilio falls through to here:
   // no consent captured, so no text is sent. Say goodbye and hang up.
   twiml.say(
-    { voice: "Polly.Joanna-Neural" },
-    `No problem. ${ownerName} will see the missed call and get back to you. Goodbye.`
+    { voice: CALL_VOICE },
+    humanSpeech(`No problem at all. <break time="200ms"/> ${ownerName} will see your missed call and get right back to you. <break time="200ms"/> Take care!`)
   );
   twiml.hangup();
 
@@ -282,15 +297,15 @@ app.post("/voice-consent", validateTwilio, async (req, res) => {
       console.error("❌ Error after IVR consent:", err.message);
     }
     twiml.say(
-      { voice: "Polly.Joanna-Neural" },
-      `Great! We've just sent you a text. Reply to it and we'll help you get sorted. Talk soon!`
+      { voice: CALL_VOICE },
+      humanSpeech(`Perfect! <break time="200ms"/> I've just sent you a text. <break time="200ms"/> Reply to it and I'll help you get sorted. <break time="200ms"/> Talk soon!`)
     );
   } else {
     // Declined (pressed 2 or something else). No message is sent.
     console.log(`🚫 IVR consent declined by ${callerNumber} (pressed ${digit || "nothing"})`);
     twiml.say(
-      { voice: "Polly.Joanna-Neural" },
-      `No problem. ${ownerName} will see the missed call and get back to you. Goodbye.`
+      { voice: CALL_VOICE },
+      humanSpeech(`No problem at all. <break time="200ms"/> ${ownerName} will see your missed call and get right back to you. <break time="200ms"/> Take care!`)
     );
   }
 
