@@ -1,6 +1,6 @@
 {
   "name": "zeromisscall-bot",
-  "version": "2.5.0",
+  "version": "2.12.0",
   "description": "AI-powered missed call text-back for plumbing businesses",
   "main": "server.js",
   "scripts": {
