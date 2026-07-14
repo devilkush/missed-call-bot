@@ -220,7 +220,7 @@ app.post("/voice", validateTwilio, async (req, res) => {
   const twilioNumber = req.body.To;
   const plumber = await db_helpers.getPlumberByTwilioNumber(db, twilioNumber);
   const businessName = plumber ? plumber.businessName : "us";
-  const ownerName    = plumber ? plumber.ownerName    : "the team";
+  const ownerName    = plumber ? String(plumber.ownerName || "the team").trim().split(" ")[0] : "the team";
 
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const twiml = new VoiceResponse();
@@ -266,7 +266,7 @@ app.post("/voice-consent", validateTwilio, async (req, res) => {
 
   const plumber = await db_helpers.getPlumberByTwilioNumber(db, twilioNumber);
   const businessName = plumber ? plumber.businessName : "us";
-  const ownerName    = plumber ? plumber.ownerName    : "the team";
+  const ownerName    = plumber ? String(plumber.ownerName || "the team").trim().split(" ")[0] : "the team";
 
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const twiml = new VoiceResponse();
