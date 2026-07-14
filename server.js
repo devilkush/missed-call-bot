@@ -62,7 +62,11 @@ const twilioClient = twilio(
   process.env.TWILIO_AUTH_TOKEN
 );
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({
+  apiKey: (process.env.OPENAI_API_KEY || "").trim(), // trim guards against stray whitespace
+  timeout: 20000,  // 20s - SMS can wait; better than an instant connection error
+  maxRetries: 2,   // retry transient network/OpenAI blips before falling back
+});
 
 let db;
 MongoClient.connect(process.env.MONGODB_URI)
@@ -172,7 +176,8 @@ TONE AND STYLE:
 5. No robotic sign-offs like "Best regards" or "Sincerely".
 6. If the job sounds complex or needs a site visit, say ${plumber.ownerName} will call them back shortly.
 7. Once you have all three pieces of info (what they need, zip code, preferred time) - summarise what you've noted down and tell them ${plumber.ownerName} will call them back to arrange a time. Do not state a time yourself. Don't keep asking unnecessary questions after that.
-8. You are texting on behalf of ${plumber.businessName} - stay in character at all times.${faqBlock}`;
+8. IMPORTANT - always keep the conversation moving: until you have all three pieces of info, EVERY reply must end with a clear question that gathers the next missing detail. Ask ONE question at a time (don't interrogate). If they've told you the problem, ask for their address and zip. Once you have that, ask when they'd prefer someone to come out. Never reply in a way that closes the conversation while information is still missing - a reply that just says "he'll get back to you" without asking anything is wrong unless you already have the problem, the address/zip, and their preferred time.
+9. You are texting on behalf of ${plumber.businessName} - stay in character at all times.${faqBlock}`;
 }
 
 // ─────────────────────────────────────────────
@@ -200,7 +205,14 @@ async function sendOpeningTextBack(plumber, twilioNumber, callerNumber) {
     return false;
   }
 
-  await sendSMS(callerNumber, twilioNumber, openingMessage);
+  console.log(`📤 Sending opening text-back: from=${twilioNumber} to=${callerNumber}`);
+  try {
+    const msg = await sendSMS(callerNumber, twilioNumber, openingMessage);
+    console.log(`📨 Twilio accepted message SID=${msg.sid} status=${msg.status}`);
+  } catch (sendErr) {
+    console.error(`❌ Twilio REJECTED the text-back: ${sendErr.message} (code ${sendErr.code})`);
+    throw sendErr;
+  }
   await db_helpers.saveMessage(db, twilioNumber, callerNumber, "assistant", openingMessage);
 
   if (plumber.ownerPhone) {
@@ -279,7 +291,12 @@ app.post("/voice-consent", validateTwilio, async (req, res) => {
   const callerNumber = req.body.From;
   const digit        = req.body.Digits;
 
+  console.log(`🔢 /voice-consent hit | Digits="${digit}" | To=${twilioNumber} | From=${callerNumber}`);
+
   const plumber = await db_helpers.getPlumberByTwilioNumber(db, twilioNumber);
+  if (!plumber) {
+    console.error(`❌ /voice-consent: no plumber found for To=${twilioNumber} - cannot send text`);
+  }
   const businessName = plumber ? plumber.businessName : "us";
   const ownerName    = plumber ? String(plumber.ownerName || "the team").trim().split(" ")[0] : "the team";
 
@@ -287,14 +304,18 @@ app.post("/voice-consent", validateTwilio, async (req, res) => {
   const twiml = new VoiceResponse();
 
   if (digit === "1" && plumber) {
-    // Affirmative opt-in. Record it (timestamped, tied to the number) as
-    // proof of consent, then trigger the text-back.
+    // Affirmative opt-in. Record consent (best-effort - never let a logging
+    // failure block the actual text), then send the text-back.
     try {
-      await db_helpers.recordConsent(db, twilioNumber, callerNumber, "ivr_press_1");
-      await sendOpeningTextBack(plumber, twilioNumber, callerNumber);
-      console.log(`✅ IVR consent (press 1) from ${callerNumber} - text-back sent`);
+      try {
+        await db_helpers.recordConsent(db, twilioNumber, callerNumber, "ivr_press_1");
+      } catch (consentErr) {
+        console.error("⚠️ recordConsent failed (continuing to send anyway):", consentErr.message);
+      }
+      const sent = await sendOpeningTextBack(plumber, twilioNumber, callerNumber);
+      console.log(`✅ IVR consent (press 1) from ${callerNumber} | text-back sent: ${sent}`);
     } catch (err) {
-      console.error("❌ Error after IVR consent:", err.message);
+      console.error("❌ Error sending text-back after IVR consent:", err.message, err.stack);
     }
     twiml.say(
       { voice: CALL_VOICE },
@@ -449,10 +470,13 @@ app.post("/incoming-sms", validateTwilio, async (req, res) => {
       role: "system",
       content:
         "URGENT: This customer has a plumbing emergency. " +
-        "Acknowledge it immediately and with empathy. " +
-        "If water is involved, tell them to shut off the main stop valve right away. " +
-        "Let them know the owner has been alerted and will call them back very shortly. " +
-        "Keep your reply short, calm, and focused on their safety.",
+        "First, acknowledge it immediately with empathy, and if water is involved tell them to shut off the main stop valve right away. " +
+        "Reassure them that " + plumber.ownerName + " has been alerted and will call them back very shortly. " +
+        "THEN, in the SAME message, still ask for the information " + plumber.ownerName + " needs to help fast: " +
+        "their address (and zip), and confirm the best number to reach them. " +
+        "Ask for whatever key detail you don't have yet - do not end the conversation until you have the address. " +
+        "Keep it calm and concise, but always move the conversation forward by asking the next needed question. " +
+        "Never just say 'he'll call you back' and stop - always pair reassurance with a question that captures a missing detail.",
     });
   }
 
@@ -479,7 +503,15 @@ app.post("/incoming-sms", validateTwilio, async (req, res) => {
     await fireLeadHandoff(db, db_helpers, sendSMS, twilioNumber, callerNumber, updatedHistory, plumber);
 
   } catch (err) {
-    console.error("❌ OpenAI error:", err.message);
+    console.error("❌ OpenAI error:", err.message,
+      "| status:", err.status, "| code:", err.code, "| type:", err.type);
+    if (!process.env.OPENAI_API_KEY) {
+      console.error("❌ OPENAI_API_KEY is MISSING from environment!");
+    } else {
+      console.error("ℹ️ OPENAI_API_KEY present, length:", process.env.OPENAI_API_KEY.trim().length,
+        "| starts sk-:", process.env.OPENAI_API_KEY.trim().startsWith("sk-"),
+        "| has whitespace:", process.env.OPENAI_API_KEY !== process.env.OPENAI_API_KEY.trim());
+    }
 
     const fallback =
       `Thanks for your message! ${plumber.ownerName} will get back to you very shortly. ` +
@@ -631,7 +663,7 @@ app.get("/", (_req, res) => {
   res.json({
     status:  "running",
     service: "ZeroMissCall",
-    version: "2.10.0",
+    version: "2.13.0",
     db:      db ? "connected" : "disconnected",
   });
 });
