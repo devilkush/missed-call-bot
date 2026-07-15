@@ -827,11 +827,15 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
         return null;
       }
 
-      // 2. Buy it and wire webhooks to our app (voice = /voice, sms = /incoming-sms)
+      // 2. Buy it and wire webhooks to our app (voice = /voice, sms = /incoming-sms,
+      //    status callback = /missed-call so the owner is alerted when a caller
+      //    declines or hangs up without pressing 1).
       const bought = await client.incomingPhoneNumbers.create({
         phoneNumber: phoneNumber,
         voiceUrl:    APP_BASE_URL + "/voice",
         voiceMethod: "POST",
+        statusCallback:       APP_BASE_URL + "/missed-call",
+        statusCallbackMethod: "POST",
         smsUrl:      APP_BASE_URL + "/incoming-sms",
         smsMethod:   "POST",
         friendlyName: "ZeroMissCall trial " + phoneNumber,
