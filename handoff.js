@@ -334,7 +334,7 @@ async function fireLeadHandoff(
       try {
         const resend = new Resend(process.env.RESEND_API_KEY);
         const dashboardUrl = plumber.dashboardToken
-          ? `https://missed-call-bot-production.up.railway.app/dashboard/${plumber.dashboardToken}`
+          ? `${process.env.PUBLIC_BASE_URL || "https://missed-call-bot-production.up.railway.app"}/dashboard/${plumber.dashboardToken}`
           : null;
 
         const { subject, html } = buildLeadEmail(
