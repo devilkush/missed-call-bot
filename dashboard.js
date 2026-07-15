@@ -52,7 +52,7 @@ function buildDashboardHtml(plumber, stats, conversations) {
     const messages = convo.messages ? convo.messages.map(m => `
       <div style="margin-bottom:10px;text-align:${m.role === "user" ? "left" : "right"};">
         <div style="display:inline-block;background:${m.role === "user" ? "rgba(255,255,255,0.075)" : "rgba(232,121,26,0.15)"};border:1px solid ${m.role === "user" ? "rgba(255,255,255,0.07)" : "rgba(232,121,26,0.25)"};color:${m.role === "user" ? "#fff" : "#f5c898"};padding:10px 14px;border-radius:${m.role === "user" ? "16px 16px 16px 4px" : "16px 16px 4px 16px"};font-size:13px;max-width:82%;line-height:1.5;text-align:left;">
-          ${m.content.replace(/</g, "&lt;").replace(/>/g, "&gt;")}
+          ${String(m.content || "").replace(/</g, "&lt;").replace(/>/g, "&gt;")}
         </div>
         <div style="font-size:10px;color:#6b84a0;margin-top:3px;padding:0 4px;">
           ${m.role === "user" ? "Customer" : "ZeroMissCall AI"}
