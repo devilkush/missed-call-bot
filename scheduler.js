@@ -460,7 +460,7 @@ function initScheduler(app, db, db_helpers, emailService) {
           if (pending > 0) {
             body += " " + pending + " still need" + (pending === 1 ? "s" : "") + " a callback.";
           }
-          body += " " + (process.env.APP_URL || "https://zeromisscall.com") +
+          body += " " + (process.env.PUBLIC_BASE_URL || "https://missed-call-bot-production.up.railway.app") +
                   "/dashboard/" + plumber.dashboardToken;
 
           await twilioClient.messages.create({
