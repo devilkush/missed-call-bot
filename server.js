@@ -260,10 +260,12 @@ app.post("/voice", validateTwilio, async (req, res) => {
   // IVR consent: caller must press 1 to opt in to text messages.
   // This is an affirmative, logged opt-in - the strongest consent basis.
   const gather = twiml.gather({
+    input: "dtmf",
     numDigits: 1,
-    action: "/voice-consent",
+    action: (process.env.PUBLIC_BASE_URL || "https://missed-call-bot-production.up.railway.app") + "/voice-consent",
     method: "POST",
-    timeout: 6,
+    timeout: 10,
+    actionOnEmptyResult: true,
   });
 
   gather.say(
@@ -671,7 +673,7 @@ app.get("/", (_req, res) => {
   res.json({
     status:  "running",
     service: "ZeroMissCall",
-    version: "2.13.1-ssmlfix",
+    version: "2.13.2-gather",
     db:      db ? "connected" : "disconnected",
   });
 });
