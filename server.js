@@ -234,10 +234,18 @@ async function sendOpeningTextBack(plumber, twilioNumber, callerNumber) {
 // US male), Polly.Stephen-Neural (casual US male), Polly.Joanna-Neural.
 const CALL_VOICE = "Polly.Danielle-Neural";
 
-// Wrap text in light SSML so it sounds human, not rushed: small pauses after
-// sentences and around the "press 1" instruction, and a slightly calmer rate.
+// Return clean plain text for Twilio <Say>. We deliberately do NOT emit raw
+// SSML tags here: when passed through twiml.say() they get HTML-escaped and
+// spoken/garbled literally, which also broke the surrounding <Gather> and the
+// press-1 capture. Plain sentences with natural punctuation read fine on the
+// neural voice. We convert any <break> hints into sentence pauses (a period).
 function humanSpeech(text) {
-  return `<speak><prosody rate="96%">${text}</prosody></speak>`;
+  return String(text)
+    .replace(/<break[^>]*\/?>/gi, " ")   // drop break tags
+    .replace(/<\/?speak>/gi, "")           // drop speak tags
+    .replace(/<\/?prosody[^>]*>/gi, "")    // drop prosody tags
+    .replace(/\s+/g, " ")                   // collapse whitespace
+    .trim();
 }
 
 app.post("/voice", validateTwilio, async (req, res) => {
@@ -663,7 +671,7 @@ app.get("/", (_req, res) => {
   res.json({
     status:  "running",
     service: "ZeroMissCall",
-    version: "2.13.0",
+    version: "2.13.1-ssmlfix",
     db:      db ? "connected" : "disconnected",
   });
 });
