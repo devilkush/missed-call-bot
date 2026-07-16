@@ -1,5 +1,5 @@
-// Deploy build: 2.13.2-gather | forced rebuild 1784220469
 require("dotenv").config();
+const APP_VERSION = "2.14.0";  // SINGLE SOURCE OF TRUTH - bump this each deploy
 const express = require("express");
 const { registerSalesRoutes } = require("./sales");
 const twilio = require("twilio");
@@ -674,7 +674,7 @@ app.get("/", (_req, res) => {
   res.json({
     status:  "running",
     service: "ZeroMissCall",
-    version: "2.13.3-CACHEBUST",
+    version: APP_VERSION,
     db:      db ? "connected" : "disconnected",
   });
 });
@@ -700,5 +700,5 @@ process.on("uncaughtException", function(err) {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(` ZeroMissCall v2.11.0 running on port ${PORT}`);
+  console.log(`ZeroMissCall v${APP_VERSION} running on port ${PORT}`);
 });
