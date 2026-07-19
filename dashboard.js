@@ -39,13 +39,15 @@ function buildDashboardHtml(plumber, stats, conversations) {
     }
 
     // Not yet marked - prompt the owner.
-    const cn = String(convo.callerNumber).replace(/'/g, "");
+    // Use the conversation's unique _id (not the caller number) so marking one
+    // conversation never collides with another from the same caller.
+    const cid = String(convo._id || convo.id || "");
     return `<div onclick="event.stopPropagation();" style="margin-top:12px;background:rgba(232,121,26,0.07);border:1px solid rgba(232,121,26,0.22);border-radius:12px;padding:10px 12px;">
       <div style="font-size:12px;color:#f5c898;margin-bottom:8px;font-weight:600;">Did this become a job?</div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <button onclick="markOutcome('${cn}','won',${avg})" style="background:#3ecf8e;color:#04220f;border:none;padding:7px 14px;border-radius:8px;font-size:12px;font-weight:800;cursor:pointer;">Yes &middot; $${avg}</button>
-        <button onclick="markOutcomeCustom('${cn}',${avg})" style="background:transparent;color:#96aec6;border:1px solid rgba(255,255,255,0.15);padding:7px 12px;border-radius:8px;font-size:12px;cursor:pointer;">Yes, different amount</button>
-        <button onclick="markOutcome('${cn}','lost',0)" style="background:transparent;color:#6b84a0;border:1px solid rgba(255,255,255,0.12);padding:7px 12px;border-radius:8px;font-size:12px;cursor:pointer;">No</button>
+        <button onclick="markOutcome('${cid}','won',${avg})" style="background:#3ecf8e;color:#04220f;border:none;padding:7px 14px;border-radius:8px;font-size:12px;font-weight:800;cursor:pointer;">Yes &middot; $${avg}</button>
+        <button onclick="markOutcomeCustom('${cid}',${avg})" style="background:transparent;color:#96aec6;border:1px solid rgba(255,255,255,0.15);padding:7px 12px;border-radius:8px;font-size:12px;cursor:pointer;">Yes, different amount</button>
+        <button onclick="markOutcome('${cid}','lost',0)" style="background:transparent;color:#6b84a0;border:1px solid rgba(255,255,255,0.12);padding:7px 12px;border-radius:8px;font-size:12px;cursor:pointer;">No</button>
       </div>
     </div>`;
   }
@@ -500,11 +502,11 @@ function buildDashboardHtml(plumber, stats, conversations) {
     }
 
     // ── JOBS RECOVERED LEDGER ─────────────────────────────────
-    function markOutcome(callerNumber, outcome, jobValue) {
+    function markOutcome(conversationId, outcome, jobValue) {
       fetch(window.location.pathname + '/outcome', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ callerNumber: callerNumber, outcome: outcome, jobValue: jobValue })
+        body: JSON.stringify({ conversationId: conversationId, outcome: outcome, jobValue: jobValue })
       })
       .then(function(r) { return r.json(); })
       .then(function(d) {
@@ -514,12 +516,12 @@ function buildDashboardHtml(plumber, stats, conversations) {
       .catch(function() { alert('Could not save. Please try again.'); });
     }
 
-    function markOutcomeCustom(callerNumber, avg) {
+    function markOutcomeCustom(conversationId, avg) {
       var v = prompt('What was this job worth? (US dollars)', avg);
       if (v === null) return;
       var n = parseFloat(String(v).replace(/[^0-9.]/g, ''));
       if (!isFinite(n) || n < 0) { alert('Enter a number, e.g. 340'); return; }
-      markOutcome(callerNumber, 'won', n);
+      markOutcome(conversationId, 'won', n);
     }
 
     // ── AUTO-REFRESH ──────────────────────────────────────────
@@ -575,11 +577,11 @@ function registerDashboardRoute(app, db, db_helpers) {
       var plumber = await db_helpers.getPlumberByToken(db, req.params.token);
       if (!plumber) return res.status(404).json({ error: "Not found" });
 
-      var callerNumber = req.body.callerNumber;
-      var outcome      = req.body.outcome;
+      var conversationId = req.body.conversationId;
+      var outcome        = req.body.outcome;
 
-      if (!callerNumber || (outcome !== "won" && outcome !== "lost")) {
-        return res.status(400).json({ error: "Missing callerNumber or invalid outcome" });
+      if (!conversationId || (outcome !== "won" && outcome !== "lost")) {
+        return res.status(400).json({ error: "Missing conversationId or invalid outcome" });
       }
 
       // Default a won job to the plumber's average job value; allow an override.
@@ -593,8 +595,11 @@ function registerDashboardRoute(app, db, db_helpers) {
         }
       }
 
-      await db_helpers.markJobOutcome(db, plumber.twilioNumber, callerNumber, outcome, value);
-      console.log("Job marked " + outcome + " for " + plumber.businessName + " (" + callerNumber + ")");
+      var result = await db_helpers.markJobOutcome(db, plumber.twilioNumber, conversationId, outcome, value);
+      if (!result || result.matchedCount === 0) {
+        return res.status(404).json({ error: "Conversation not found" });
+      }
+      console.log("Job marked " + outcome + " ($" + value + ") for " + plumber.businessName + " convo " + conversationId);
       res.json({ ok: true, outcome: outcome, jobValue: value });
     } catch (err) {
       console.error("Outcome update error:", err.message);
