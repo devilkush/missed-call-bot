@@ -3,6 +3,21 @@
 // ─────────────────────────────────────────────────────────────
 
 function buildDashboardHtml(plumber, stats, conversations) {
+  // Escape anything that could break the HTML or the surrounding template
+  // literal / inline JS: angle brackets, quotes, backticks, and ${ sequences.
+  // A single stray backtick or ${ in a customer message was corrupting the
+  // whole page script, which stopped conversations from expanding.
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;")
+      .replace(/`/g, "&#96;")
+      .replace(/\$\{/g, "$&#123;");
+  }
+
   const now = new Date();
   const monthName = now.toLocaleString("en-US", { month: "long", year: "numeric" });
 
@@ -52,7 +67,7 @@ function buildDashboardHtml(plumber, stats, conversations) {
     const messages = convo.messages ? convo.messages.map(m => `
       <div style="margin-bottom:10px;text-align:${m.role === "user" ? "left" : "right"};">
         <div style="display:inline-block;background:${m.role === "user" ? "rgba(255,255,255,0.075)" : "rgba(232,121,26,0.15)"};border:1px solid ${m.role === "user" ? "rgba(255,255,255,0.07)" : "rgba(232,121,26,0.25)"};color:${m.role === "user" ? "#fff" : "#f5c898"};padding:10px 14px;border-radius:${m.role === "user" ? "16px 16px 16px 4px" : "16px 16px 4px 16px"};font-size:13px;max-width:82%;line-height:1.5;text-align:left;">
-          ${String(m.content || "").replace(/</g, "&lt;").replace(/>/g, "&gt;")}
+          ${esc(m.content)}
         </div>
         <div style="font-size:10px;color:#6b84a0;margin-top:3px;padding:0 4px;">
           ${m.role === "user" ? "Customer" : "ZeroMissCall AI"}
@@ -70,9 +85,9 @@ function buildDashboardHtml(plumber, stats, conversations) {
               ${convo.callerNumber}
             </div>
             <div style="font-size:12px;color:#6b84a0;margin-bottom:6px;">${date} &middot; ${msgCount} messages</div>
-            ${convo.jobDescription ? `<div style="font-size:12px;color:#96aec6;">${convo.jobDescription}</div>` : ""}
-            ${convo.callerZip ? `<div style="font-size:12px;color:#96aec6;">Zip: ${convo.callerZip}</div>` : ""}
-            ${convo.preferredTime ? `<div style="font-size:12px;color:#96aec6;">Prefers: ${convo.preferredTime}</div>` : ""}
+            ${convo.jobDescription ? `<div style="font-size:12px;color:#96aec6;">${esc(convo.jobDescription)}</div>` : ""}
+            ${convo.callerZip ? `<div style="font-size:12px;color:#96aec6;">Zip: ${esc(convo.callerZip)}</div>` : ""}
+            ${convo.preferredTime ? `<div style="font-size:12px;color:#96aec6;">Prefers: ${esc(convo.preferredTime)}</div>` : ""}
             ${isLead ? outcomeRow(convo, plumber) : ""}
           </div>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0;">
