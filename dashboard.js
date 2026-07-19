@@ -54,6 +54,14 @@ function buildDashboardHtml(plumber, stats, conversations) {
     const isEmergency = convo.emergency;
     const isLead      = convo.leadCaptured;
     const msgCount    = convo.messages ? convo.messages.length : 0;
+    // A conversation worth marking as a job is any real back-and-forth: the
+    // customer replied at least once. The plumber may well call these back and
+    // win the work even if the AI never formally "captured" the lead - so they
+    // can log it and it counts toward Revenue Recovered.
+    const hasCustomerReply = convo.messages
+      ? convo.messages.some(m => m.role === "user")
+      : false;
+    const canMarkJob = isLead || hasCustomerReply;
     const date        = new Date(convo.createdAt).toLocaleDateString("en-US", {
       month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
     });
@@ -88,7 +96,7 @@ function buildDashboardHtml(plumber, stats, conversations) {
             ${convo.jobDescription ? `<div style="font-size:12px;color:#96aec6;">${esc(convo.jobDescription)}</div>` : ""}
             ${convo.callerZip ? `<div style="font-size:12px;color:#96aec6;">Zip: ${esc(convo.callerZip)}</div>` : ""}
             ${convo.preferredTime ? `<div style="font-size:12px;color:#96aec6;">Prefers: ${esc(convo.preferredTime)}</div>` : ""}
-            ${isLead ? outcomeRow(convo, plumber) : ""}
+            ${canMarkJob ? outcomeRow(convo, plumber) : ""}
           </div>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0;">
             ${statusBadge}
