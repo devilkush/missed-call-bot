@@ -419,7 +419,7 @@ function buildDashboardHtml(plumber, stats, conversations) {
       var services = document.getElementById('s-services').value
         .split(',').map(function(s){ return s.trim(); }).filter(Boolean);
       var faqs = document.getElementById('s-faqs').value
-        .split('\n').map(function(s){ return s.trim(); }).filter(Boolean);
+        .split(String.fromCharCode(10)).map(function(s){ return s.trim(); }).filter(Boolean);
 
       var payload = {
         hours:              document.getElementById('s-hours').value.trim(),
