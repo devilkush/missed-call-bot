@@ -510,9 +510,14 @@ async function ensureIndexes(db) {
 // Owner marks a captured lead as won or lost after calling back.
 // outcome: "won" | "lost". value only used when won.
 // ─────────────────────────────────────────────
-async function markJobOutcome(db, twilioNumber, callerNumber, outcome, value) {
+async function markJobOutcome(db, twilioNumber, conversationId, outcome, value) {
   if (!db) return null;
   if (outcome !== "won" && outcome !== "lost") return null;
+
+  var ObjectId = require("mongodb").ObjectId;
+  var _id;
+  try { _id = new ObjectId(String(conversationId)); }
+  catch (e) { return { matchedCount: 0 }; } // invalid id -> nothing matched
 
   const set = {
     jobOutcome:      outcome,
@@ -521,8 +526,11 @@ async function markJobOutcome(db, twilioNumber, callerNumber, outcome, value) {
     jobValue:        outcome === "won" ? Math.max(0, Number(value) || 0) : 0,
   };
 
+  // Match the ONE specific conversation by its unique _id (scoped to this
+  // plumber's number for safety). Using _id prevents multiple conversations
+  // from the same caller from overwriting each other's job value.
   return db.collection("conversations").updateOne(
-    { twilioNumber, callerNumber },
+    { _id: _id, twilioNumber: twilioNumber },
     { $set: set }
   );
 }
