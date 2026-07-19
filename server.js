@@ -1,5 +1,5 @@
 require("dotenv").config();
-const APP_VERSION = "2.14.0";  // SINGLE SOURCE OF TRUTH - bump this each deploy
+const APP_VERSION = "2.15.0";  // SINGLE SOURCE OF TRUTH - bump this each deploy
 const express = require("express");
 const { registerSalesRoutes } = require("./sales");
 const twilio = require("twilio");
@@ -29,7 +29,16 @@ app.set("trust proxy", true);
 // Stops strangers POSTing fake payloads that cost us SMS + OpenAI money.
 // Requires TWILIO_AUTH_TOKEN to be the correct 32-char token in Railway.
 // ─────────────────────────────────────────────
-const validateTwilio = twilio.webhook({ validate: true });
+// Only enforce signature validation when we actually have the auth token.
+// If TWILIO_AUTH_TOKEN is missing (e.g. not set after a redeploy), validating
+// would reject every real Twilio call with a cryptic "application error".
+// So we log a loud warning and skip validation rather than break all calls.
+if (!process.env.TWILIO_AUTH_TOKEN) {
+  console.error("TWILIO_AUTH_TOKEN is MISSING - webhook signature validation DISABLED. Set it in Railway variables!");
+}
+const validateTwilio = process.env.TWILIO_AUTH_TOKEN
+  ? twilio.webhook({ validate: true })
+  : function (req, res, next) { next(); };
 
 // ─────────────────────────────────────────────
 // CORS - allow requests from zeromisscall.com
