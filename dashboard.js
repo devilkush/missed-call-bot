@@ -81,7 +81,10 @@ function buildDashboardHtml(plumber, stats, conversations) {
               <a href="tel:${convo.callerNumber}" onclick="event.stopPropagation()" style="display:inline-flex;align-items:center;gap:5px;background:#E8791A;color:#fff;padding:6px 14px;border-radius:8px;font-family:'Nunito',sans-serif;font-size:12px;font-weight:800;text-decoration:none;">
                 Call Back
               </a>
-              <span id="arrow-${index}" style="color:#6b84a0;font-size:11px;margin-left:4px;">v</span>
+            </div>
+            <div style="display:inline-flex;align-items:center;gap:5px;color:#8fa3b8;font-size:12px;font-weight:600;">
+              <span id="arrow-label-${index}">View ${msgCount} message${msgCount === 1 ? "" : "s"}</span>
+              <span id="arrow-${index}" style="font-size:12px;transition:transform 0.2s;">▾</span>
             </div>
           </div>
         </div>
@@ -375,12 +378,19 @@ function buildDashboardHtml(plumber, stats, conversations) {
     function toggleConvo(index) {
       const el = document.getElementById('convo-' + index);
       const arrow = document.getElementById('arrow-' + index);
-      if (el.style.display === 'none') {
+      const label = document.getElementById('arrow-label-' + index);
+      if (!el) return;
+      if (el.style.display === 'none' || el.style.display === '') {
         el.style.display = 'block';
-        arrow.textContent = '^';
+        if (arrow) arrow.style.transform = 'rotate(180deg)';
+        if (label) label.textContent = 'Hide conversation';
       } else {
         el.style.display = 'none';
-        arrow.textContent = 'v';
+        if (arrow) arrow.style.transform = 'rotate(0deg)';
+        if (label) {
+          var count = el.getAttribute('data-count') || '';
+          label.textContent = 'View conversation';
+        }
       }
     }
 
