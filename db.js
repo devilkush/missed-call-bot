@@ -522,25 +522,28 @@ async function markJobOutcome(db, twilioNumber, callerNumber, outcome, value) {
   };
 
   return db.collection("conversations").updateOne(
-    { twilioNumber, callerNumber, leadCaptured: true },
+    { twilioNumber, callerNumber },
     { $set: set }
   );
 }
 
-// Totals for the ledger: how many leads became jobs, and what they were worth.
+// Totals for the ledger. Revenue/won/lost count ANY conversation the owner
+// marked (they can now mark non-lead threads too). "unmarked" stays scoped to
+// captured leads that still need actioning, so the daily summary only nags
+// about genuine leads awaiting a callback - not every stray thread.
 async function getRecoveredTotals(db, twilioNumber, fromDate, toDate) {
   if (!db) return { won: 0, lost: 0, unmarked: 0, revenue: 0 };
 
-  const query = { twilioNumber, leadCaptured: true };
+  const query = { twilioNumber };
   if (fromDate && toDate) query.createdAt = { $gte: fromDate, $lte: toDate };
 
-  const leads = await db.collection("conversations").find(query).toArray();
+  const convos = await db.collection("conversations").find(query).toArray();
 
   return {
-    won:      leads.filter(l => l.jobOutcome === "won").length,
-    lost:     leads.filter(l => l.jobOutcome === "lost").length,
-    unmarked: leads.filter(l => !l.jobOutcome).length,
-    revenue:  leads.reduce((sum, l) => sum + (l.jobOutcome === "won" ? (l.jobValue || 0) : 0), 0),
+    won:      convos.filter(c => c.jobOutcome === "won").length,
+    lost:     convos.filter(c => c.jobOutcome === "lost").length,
+    unmarked: convos.filter(c => c.leadCaptured && !c.jobOutcome).length,
+    revenue:  convos.reduce((sum, c) => sum + (c.jobOutcome === "won" ? (c.jobValue || 0) : 0), 0),
   };
 }
 
