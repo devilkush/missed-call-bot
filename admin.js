@@ -409,7 +409,8 @@ function buildAdminDashboardHtml(plumbers, allStats, invitations) {
     "<p style='font-size:13px;color:#96aec6;margin-bottom:14px;'>Just got off a call with an interested plumber? Send them a signup invitation while it's fresh.</p>" +
     "<div style='display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start;'>" +
     "<input id='inv-email' type='email' placeholder='Email address' style='flex:2;min-width:220px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:11px 14px;font-size:14px;color:#fff;font-family:DM Sans,sans-serif;outline:none;'/>" +
-    "<input id='inv-name' type='text' placeholder='First name (optional)' style='flex:1;min-width:160px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:11px 14px;font-size:14px;color:#fff;font-family:DM Sans,sans-serif;outline:none;'/>" +
+    "<input id='inv-business' type='text' placeholder='Business name' style='flex:1;min-width:180px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:11px 14px;font-size:14px;color:#fff;font-family:DM Sans,sans-serif;outline:none;'/>" +
+    "<input id='inv-name' type='text' placeholder='Owner first name (optional)' style='flex:1;min-width:160px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:11px 14px;font-size:14px;color:#fff;font-family:DM Sans,sans-serif;outline:none;'/>" +
     "<button id='inv-btn' onclick='sendInvite()' style='background:#E8791A;color:#fff;border:none;border-radius:8px;padding:11px 24px;font-family:Nunito,sans-serif;font-size:14px;font-weight:800;cursor:pointer;'>Send Invitation</button>" +
     "</div>" +
     "<div id='inv-msg' style='font-size:13px;margin-top:10px;min-height:16px;'></div>" +
@@ -421,15 +422,16 @@ function buildAdminDashboardHtml(plumbers, allStats, invitations) {
     "async function sendInvite(){" +
     "var email=document.getElementById('inv-email').value.trim();" +
     "var name=document.getElementById('inv-name').value.trim();" +
+    "var businessName=document.getElementById('inv-business').value.trim();" +
     "var msg=document.getElementById('inv-msg');" +
     "var btn=document.getElementById('inv-btn');" +
     "if(!email||email.indexOf('@')===-1){msg.style.color='#f05252';msg.textContent='Enter a valid email address';return;}" +
     "btn.disabled=true;btn.textContent='Sending...';msg.textContent='';" +
     "try{" +
     "var secret=new URLSearchParams(window.location.search).get('secret');" +
-    "var r=await fetch('/admin/invite?secret='+encodeURIComponent(secret),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email,name:name})});" +
+    "var r=await fetch('/admin/invite?secret='+encodeURIComponent(secret),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email,name:name,businessName:businessName})});" +
     "var d=await r.json();" +
-    "if(r.ok){msg.style.color='#3ecf8e';msg.textContent='Invitation sent to '+email;document.getElementById('inv-email').value='';document.getElementById('inv-name').value='';setTimeout(function(){location.reload();},1500);}" +
+    "if(r.ok){msg.style.color='#3ecf8e';msg.textContent='Invitation sent to '+email;document.getElementById('inv-email').value='';document.getElementById('inv-name').value='';document.getElementById('inv-business').value='';setTimeout(function(){location.reload();},1500);}" +
     "else{msg.style.color='#f05252';msg.textContent=(d&&(d.message||d.error))||'Failed to send invitation';}" +
     "}catch(e){msg.style.color='#f05252';msg.textContent='Network error: '+e.message;}" +
     "btn.disabled=false;btn.textContent='Send Invitation';" +
@@ -516,6 +518,7 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
     try {
       const email = (req.body.email || "").trim();
       const name  = (req.body.name  || "").trim();
+      const businessName = (req.body.businessName || "").trim();
 
       if (!email || !email.includes("@")) {
         return res.status(400).json({
@@ -533,13 +536,14 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
         });
       }
 
-      await email2.sendInvitationEmail(email, name);
+      await email2.sendInvitationEmail(email, name, businessName);
 
       // Log the invitation for follow-ups
       try {
         await db.collection("invitations").insertOne({
           email:  email,
           name:   name || null,
+          businessName: businessName || null,
           sentAt: new Date(),
         });
       } catch (logErr) {
