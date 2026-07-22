@@ -337,50 +337,40 @@ function buildWinBackEmail(plumber, stats) {
 // Purpose: get a warm prospect to sign up while the call is fresh
 // name is OPTIONAL - falls back to a generic greeting/subject if blank
 // ─────────────────────────────────────────────────────────────────────────────
-function buildInvitationEmail(name) {
+function buildInvitationEmail(name, businessName) {
   var hasName  = name && String(name).trim().length > 0;
   var safeName = hasName ? String(name).trim() : "";
-  var signup   = SITE + "/signup.html";
+  var hasBiz   = businessName && String(businessName).trim().length > 0;
+  var safeBiz  = hasBiz ? String(businessName).trim() : "your business";
 
   var body =
     section(
       greeting(hasName ? safeName : "there") +
-      "<p style='font-family:Arial,Helvetica,sans-serif;font-size:20px;font-weight:700;color:#0b1928;margin:0 0 16px 0;'>Great speaking with you today</p>" +
-      bodyText("As promised, here is your link to get started with ZeroMissCall. Your 14-day free trial is ready - no card needed to start, and setup takes about 2 minutes.") +
-      bodyText("From the moment you are set up, every call you miss gets an instant text-back. Our AI chats with the customer, finds out what job they need, and sends you the lead - so the work stays with you instead of going to the next plumber on Google.")
+      bodyText("I called earlier and spoke with someone at " + safeBiz + " - thanks for taking a second to pass this along.") +
+      bodyText("I'll keep it short: I built a tool that texts your customers back automatically when you can't get to the phone. When you're under a sink or on a job and a call goes to voicemail, most people just hang up and call the next plumber. My system catches that missed call and sends an instant text - \"Sorry we missed you, what do you need?\" - then asks a few questions so the lead's sitting in your inbox when you're free, instead of gone.") +
+      bodyText("It's built for busy plumbers running lean, not big outfits with a receptionist. One recovered job usually covers the cost several times over.") +
+      bodyText("There's a free 14-day trial, no card needed, and it takes about 10 minutes to set up. Feel free to have a look at our website and register if it looks like a fit - no pressure at all.")
     ) +
-    "<table width='100%' cellpadding='0' cellspacing='0' border='0'><tr><td class='pad' style='padding:20px 40px;'>" +
-    infoBox(ORANGE, "What happens when you sign up",
-      "1. Fill in your business details (takes 2 minutes)<br/>" +
-      "2. We send you a quick setup guide for call forwarding<br/>" +
-      "3. Your missed calls start getting answered automatically<br/>" +
-      "4. You get every lead by text and in your dashboard"
-    ) +
-    infoBox("#0b1928", "The numbers",
-      "<b>14-day free trial</b> - try it on real calls first<br/>" +
-      "<b>$69/month</b> after the trial<br/>" +
-      "<b>No contract</b> - cancel anytime<br/>" +
-      "One recovered job usually pays for months of service"
-    ) +
-    "</td></tr></table>" +
     divider() +
     "<table width='100%' cellpadding='0' cellspacing='0' border='0'><tr><td class='pad' align='center' style='padding:28px 40px;'>" +
-    bigCta(signup, "Start My Free Trial") +
+    bigCta(SITE, "Visit ZeroMissCall") +
     "<p style='font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#999999;margin:16px 0 0 0;line-height:1.5;'>" +
-    "Any questions at all? Just reply to this email - it comes straight to Ian." +
+    "If it's useful, great - if not, no worries at all. Happy to answer any questions - just reply to this email." +
     "</p>" +
     "</td></tr></table>";
 
-  var subject = hasName
-    ? "Your ZeroMissCall free trial is ready, " + safeName
-    : "Your ZeroMissCall free trial is ready";
+  var subject = hasBiz
+    ? "Quick question about missed calls at " + safeBiz
+    : "Quick question about missed calls at your business";
 
   return {
     subject: subject,
     html: wrap(
       body,
-      "Great speaking with you today. Here is your link to start your 14-day free ZeroMissCall trial.",
-      "You are receiving this because you spoke with Ian from ZeroMissCall."
+      "I called earlier - here's a quick note about how ZeroMissCall helps plumbers stop losing jobs to missed calls.",
+      "You are receiving this because Ian from ZeroMissCall recently called your business. " +
+      "ZeroMissCall LLC, 30 N Gould St Ste N, Sheridan, WY 82801. " +
+      "Not interested? Just reply \"no thanks\" and we won't follow up."
     ),
   };
 }
@@ -418,9 +408,9 @@ async function sendWinBackEmail(plumber, stats) {
   return r;
 }
 
-async function sendInvitationEmail(toEmail, name) {
+async function sendInvitationEmail(toEmail, name, businessName) {
   if (!toEmail) return;
-  var t = buildInvitationEmail(name);
+  var t = buildInvitationEmail(name, businessName);
   var r = await resend.emails.send({ from: FROM_IAN, to: toEmail, subject: t.subject, html: t.html });
   console.log("Invitation email sent to " + toEmail + (name ? " (" + name + ")" : ""));
   return r;
