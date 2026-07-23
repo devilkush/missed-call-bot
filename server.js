@@ -1,5 +1,5 @@
 require("dotenv").config();
-const APP_VERSION = "2.18.0";  // SINGLE SOURCE OF TRUTH - bump this each deploy
+const APP_VERSION = "2.19.1";  // SINGLE SOURCE OF TRUTH - bump this each deploy
 const express = require("express");
 const { registerSalesRoutes } = require("./sales");
 const twilio = require("twilio");
@@ -13,7 +13,7 @@ const emailService2 = require("./email2");
 const { initScheduler } = require("./scheduler");
 const { registerAdminRoutes, sendDailySummaryEmail, notifyOwnerError } = require("./admin");
 const { registerDashboardRoute } = require("./dashboard");
-const { fireLeadHandoff } = require("./handoff");
+const { fireLeadHandoff, fireSalesHandoff } = require("./handoff");
 const { registerBillingRoutes } = require("./billing");
 
 const app = express();
@@ -137,6 +137,13 @@ function isDuplicate(callSid) {
 // BUILD SYSTEM PROMPT FOR OPENAI
 // ─────────────────────────────────────────────
 function buildSystemPrompt(plumber) {
+  // Accounts can override the default plumber persona entirely (used for the
+  // ZeroMissCall sales line, where the caller is a plumber interested in the
+  // product rather than a homeowner with a leak).
+  if (plumber.customSystemPrompt && String(plumber.customSystemPrompt).trim()) {
+    return String(plumber.customSystemPrompt).trim();
+  }
+
   const faqBlock =
     plumber.customFaqs && plumber.customFaqs.length > 0
       ? `\n\nCUSTOM FAQs FOR THIS BUSINESS:\n` +
@@ -202,10 +209,16 @@ async function sendSMS(to, from, body) {
 // Honors opt-out, saves to history, alerts the owner. Returns true if sent.
 // ─────────────────────────────────────────────
 async function sendOpeningTextBack(plumber, twilioNumber, callerNumber) {
-  const openingMessage =
-    `Hey! Thanks for calling ${plumber.businessName} - sorry we missed you, ` +
-    `we're probably out on a job. I can help you right now over text. What do you need? ` +
-    `Reply STOP to opt out, HELP for help. Msg & data rates may apply.`;
+  // Accounts can override the opening text (the ZeroMissCall sales line uses
+  // its own pitch). The STOP/HELP disclosure is appended either way so the
+  // A2P compliance requirement can never be accidentally dropped.
+  const DISCLOSURE = " Reply STOP to opt out, HELP for help. Msg & data rates may apply.";
+
+  const openingMessage = (plumber.customOpeningMessage && String(plumber.customOpeningMessage).trim())
+    ? String(plumber.customOpeningMessage).trim() + DISCLOSURE
+    : `Hey! Thanks for calling ${plumber.businessName} - sorry we missed you, ` +
+      `we're probably out on a job. I can help you right now over text. What do you need?` +
+      DISCLOSURE;
 
   const blocked = await optout.isBlockedFromSending(
     db_helpers, db, twilioNumber, callerNumber
@@ -278,14 +291,21 @@ app.post("/voice", validateTwilio, async (req, res) => {
     actionOnEmptyResult: true,
   });
 
+  // Accounts can override the intro line (the ZeroMissCall sales line greets
+  // callers as Ian, not as a plumber out on a job). The consent instruction
+  // and required disclosures are always appended, so press-1 consent and the
+  // A2P wording can never be lost by a custom greeting.
+  const introLine = (plumber && plumber.customGreeting && String(plumber.customGreeting).trim())
+    ? String(plumber.customGreeting).trim()
+    : `Hey! Thanks for calling ${businessName}. ${ownerName}'s probably out on a job right now, but I can help.`;
+
   gather.say(
     { voice: CALL_VOICE },
     humanSpeech(
-      `Hey! Thanks for calling ${businessName}. <break time="300ms"/> ` +
-      `${ownerName}'s probably out on a job right now, <break time="200ms"/> but I can help. <break time="400ms"/> ` +
-      `To get help by text, <break time="150ms"/> just press one, <break time="150ms"/> and I'll text you right back about what you need. <break time="400ms"/> ` +
-      `Message frequency varies, and message and data rates may apply. <break time="150ms"/> You can reply STOP any time to opt out. <break time="400ms"/> ` +
-      `Or to skip the text, <break time="150ms"/> press two, or just hang up.`
+      introLine + ` ` +
+      `To get help by text, just press one, and I'll text you right back. ` +
+      `Message frequency varies, and message and data rates may apply. You can reply STOP any time to opt out. ` +
+      `Or to skip the text, press two, or just hang up.`
     )
   );
 
@@ -520,7 +540,13 @@ app.post("/incoming-sms", validateTwilio, async (req, res) => {
 
     // ── LEAD CAPTURE CHECK ───────────────────────────────────
     const updatedHistory = await db_helpers.getConversation(db, twilioNumber, callerNumber);
-    await fireLeadHandoff(db, db_helpers, sendSMS, twilioNumber, callerNumber, updatedHistory, plumber);
+    if (plumber.salesMode) {
+      // ZeroMissCall's own sales line: capture an email or a callback request
+      // rather than a plumbing job.
+      await fireSalesHandoff(db, db_helpers, sendSMS, twilioNumber, callerNumber, updatedHistory, plumber, emailService2);
+    } else {
+      await fireLeadHandoff(db, db_helpers, sendSMS, twilioNumber, callerNumber, updatedHistory, plumber);
+    }
 
   } catch (err) {
     console.error("❌ OpenAI error:", err.message,
