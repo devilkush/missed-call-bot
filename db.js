@@ -25,6 +25,14 @@
   serviceArea:           "Dallas, TX",
   hours:                 "Mon-Fri 8am-6pm",
   customFaqs:            [],               // [{question, answer}]
+
+  // ── Sales line (ZeroMissCall's own account) ──
+  // When salesMode is true the caller is a plumber interested in the product,
+  // not a homeowner. These override the default plumber persona/scripts.
+  salesMode:             false,            // routes to sales handoff, not lead capture
+  customSystemPrompt:    null,             // overrides buildSystemPrompt() entirely
+  customGreeting:        null,             // overrides the voice intro line
+  customOpeningMessage:  null,             // overrides the opening text-back
   services:              [],               // ["drain unblocking", "boiler repair"]
   emergencyAvailable:    true,
   active:                true,
