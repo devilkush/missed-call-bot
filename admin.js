@@ -415,6 +415,15 @@ function buildAdminDashboardHtml(plumbers, allStats, invitations) {
     "</div>" +
     "<div id='inv-msg' style='font-size:13px;margin-top:10px;min-height:16px;'></div>" +
     inviteHistory +
+    "</div>" +
+    "<h2 style='font-family:Nunito,sans-serif;font-size:16px;font-weight:900;margin:24px 0 12px;'>Sales Line</h2>" +
+    "<div style='background:rgba(255,255,255,0.025);border:1px solid var(--border);border-radius:14px;padding:20px;'>" +
+    "<p style='font-size:13px;color:#96aec6;margin-bottom:14px;'>Turn a ZeroMissCall account into the sales line. Callers get the founder pitch instead of the plumber script, and the AI captures an email or a callback request. Re-run this any time the sales prompt changes.</p>" +
+    "<div style='display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start;'>" +
+    "<input id='sales-email' type='email' placeholder='Account email' style='flex:2;min-width:220px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:11px 14px;font-size:14px;color:#fff;font-family:DM Sans,sans-serif;outline:none;'/>" +
+    "<button id='sales-btn' onclick='enableSalesMode()' style='background:#3ecf8e;color:#04220f;border:none;border-radius:8px;padding:11px 24px;font-family:Nunito,sans-serif;font-size:14px;font-weight:800;cursor:pointer;'>Enable Sales Mode</button>" +
+    "</div>" +
+    "<div id='sales-msg' style='font-size:13px;margin-top:10px;min-height:16px;'></div>" +
     "</div>";
 
   var inviteScript =
@@ -435,6 +444,22 @@ function buildAdminDashboardHtml(plumbers, allStats, invitations) {
     "else{msg.style.color='#f05252';msg.textContent=(d&&(d.message||d.error))||'Failed to send invitation';}" +
     "}catch(e){msg.style.color='#f05252';msg.textContent='Network error: '+e.message;}" +
     "btn.disabled=false;btn.textContent='Send Invitation';" +
+    "}" +
+    "async function enableSalesMode(){" +
+    "var email=document.getElementById('sales-email').value.trim();" +
+    "var msg=document.getElementById('sales-msg');" +
+    "var btn=document.getElementById('sales-btn');" +
+    "if(!email||email.indexOf('@')===-1){msg.style.color='#f05252';msg.textContent='Enter the account email';return;}" +
+    "if(!confirm('Enable sales mode for '+email+'? This replaces the plumber script on that account.'))return;" +
+    "btn.disabled=true;btn.textContent='Applying...';msg.textContent='';" +
+    "try{" +
+    "var secret=new URLSearchParams(window.location.search).get('secret');" +
+    "var r=await fetch('/admin/enable-sales-mode?secret='+encodeURIComponent(secret),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email})});" +
+    "var d=await r.json();" +
+    "if(r.ok){msg.style.color='#3ecf8e';msg.textContent=d.message+' - number '+d.twilioNumber;}" +
+    "else{msg.style.color='#f05252';msg.textContent=(d&&(d.error||d.message))||'Failed';}" +
+    "}catch(e){msg.style.color='#f05252';msg.textContent='Network error: '+e.message;}" +
+    "btn.disabled=false;btn.textContent='Enable Sales Mode';" +
     "}" +
     "<\/script>";
 
@@ -514,6 +539,111 @@ function registerAdminRoutes(app, db, db_helpers, emailService) {
   // Body: { email, name (optional) }
   // Sends the invitation email (email2.js) to a prospect after a
   // sales call and logs it in the invitations collection.
+  // ── ENABLE SALES MODE on an account (ZeroMissCall's own line) ───────────
+  // POST /admin/enable-sales-mode?secret=...   body: { email: "you@..." }
+  // Flips the account to the sales persona: the caller is a plumber who is
+  // interested in the product, not a homeowner with a leak.
+  app.post("/admin/enable-sales-mode", requireAdminAuth, async (req, res) => {
+    try {
+      const email = (req.body.email || "").trim().toLowerCase();
+      if (!email) return res.status(400).json({ error: "email required" });
+
+      const plumber = await db.collection("plumbers").findOne({ email: email });
+      if (!plumber) return res.status(404).json({ error: "No account with that email" });
+
+      const SALES_PROMPT = [
+        "You are Ian, the founder of ZeroMissCall. You are texting a plumbing business owner who just called your number and didn't get through - so they have experienced the product firsthand.",
+        "",
+        "WHAT ZEROMISSCALL DOES:",
+        "When a customer calls a plumber and the call isn't answered, the system texts them back within seconds, has a conversation to find out what they need, and sends the plumber the lead by text and to a dashboard.",
+        "",
+        "PRICING (never state anything different):",
+        "- $69/month",
+        "- 14-day free trial",
+        "- No card needed to start",
+        "- Cancel anytime, no contract",
+        "",
+        "YOUR GOAL - get ONE of these two outcomes:",
+        "1. Their EMAIL, so you can send full details, or",
+        "2. A CALLBACK - their best number, a good time, and their name.",
+        "Ask which they'd prefer. Don't push both.",
+        "",
+        "IF THEY CHOOSE EMAIL: ask for the address, read it back to confirm, tell them it's on its way.",
+        "IF THEY CHOOSE A CALL: confirm whether the number they called from is best or if there's a better one, ask what time suits them, and get their first name. Say you'll get back to them. NEVER promise an exact time.",
+        "",
+        "THE DASHBOARD (answer questions about this confidently):",
+        "- It's a web page - no app to download, nothing to install.",
+        "- They get a private link when they sign up. No password to remember, just save the link or bookmark it on their phone.",
+        "- It shows every missed call and the full text conversation the AI had with that customer, so they can read exactly what was said.",
+        "- Captured leads show the job, the zip code and when the customer would prefer someone out - with a tap-to-call button to ring them straight back.",
+        "- Emergencies are flagged and pinned to the top.",
+        "- They can reply to a customer directly from the dashboard.",
+        "- After they call a customer back, they can mark whether it became a job and what it was worth. The dashboard adds these up so they can see the actual money the service recovered for them.",
+        "- Settings let them set business hours, service area, average job value and answers to common questions the AI should use.",
+        "",
+        "SETUP (keep this simple and reassuring):",
+        "- They keep their existing business number. Nothing changes for their customers.",
+        "- They set call forwarding on their phone so unanswered calls go to the ZeroMissCall number. Takes a few minutes.",
+        "- Ian sends a short setup guide and will walk them through it.",
+        "- If they ask something technical you're unsure of, say Ian will sort it with them - don't guess.",
+        "",
+        "TONE:",
+        "- You are a solo founder, not a sales team. Talk like a person.",
+        "- 2-3 sentences per message. This is SMS.",
+        "- Warm and direct. Never pushy, never corporate, no buzzwords.",
+        "- Never use exclamation marks more than once in a message.",
+        "",
+        "HANDLING OBJECTIONS:",
+        "- \"We've got that covered\" - ask what they use now, and whether it catches calls when nobody's in the office. Don't argue.",
+        "- \"Not interested\" - thank them, say no problem, stop selling. Do not try again.",
+        "- \"How much?\" - $69/month, 14 days free, no card to start.",
+        "- \"Does it really work?\" - point out they're experiencing it right now.",
+        "- \"Who is this / how did you get my number?\" - you called their business earlier today and left your number with whoever answered.",
+        "- \"I'm driving / can't talk\" - no problem at all, ask when suits better and leave it there.",
+        "- \"Is this a robot?\" - be honest. Yes, it's the ZeroMissCall system texting on Ian's behalf. That's the product they're seeing in action.",
+        "",
+        "HARD RULES - never break these:",
+        "- NEVER invent features, results, statistics, or customer numbers.",
+        "- NEVER claim ZeroMissCall has customers, reviews, or case studies.",
+        "- NEVER state a price other than $69/month.",
+        "- NEVER promise a specific callback time.",
+        "- NEVER send a web link in a text message.",
+        "- If asked something you don't know, say Ian will confirm - don't guess.",
+        "- If they seem uninterested, let it go gracefully.",
+      ].join("\n");
+
+      const SALES_GREETING =
+        "Hi, this is Ian from ZeroMissCall. Sorry I couldn't get to the phone right now.";
+
+      const SALES_OPENING =
+        "Hi, Ian here from ZeroMissCall. Sorry I missed your call - but that's actually the point. " +
+        "You just rang, I didn't pick up, and you got this text within seconds. That's exactly what your " +
+        "customers get when you're under a sink. Want me to send the details over, or would you rather I give you a quick ring?";
+
+      await db.collection("plumbers").updateOne(
+        { _id: plumber._id },
+        { $set: {
+            salesMode:            true,
+            customSystemPrompt:   SALES_PROMPT,
+            customGreeting:       SALES_GREETING,
+            customOpeningMessage: SALES_OPENING,
+            updatedAt:            new Date(),
+        } }
+      );
+
+      console.log("Sales mode ENABLED for " + email + " on " + plumber.twilioNumber);
+      res.json({
+        success: true,
+        message: "Sales mode enabled for " + plumber.businessName,
+        twilioNumber: plumber.twilioNumber,
+        dashboardUrl: (process.env.PUBLIC_BASE_URL || "https://missed-call-bot-production.up.railway.app") + "/dashboard/" + plumber.dashboardToken,
+      });
+    } catch (err) {
+      console.error("Enable sales mode error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.post("/admin/invite", requireAdminAuth, async (req, res) => {
     try {
       const email = (req.body.email || "").trim();
