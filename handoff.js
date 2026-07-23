@@ -397,7 +397,85 @@ function extractJobType(description) {
   return "general";
 }
 
-module.exports = { fireLeadHandoff, analyseConversation };
+// ─────────────────────────────────────────────
+// SALES HANDOFF (ZeroMissCall's own line)
+// Used when an account has salesMode enabled. The caller is a plumber who is
+// interested in the product, not a homeowner with a leak. Two outcomes:
+//   1. They give an email  -> auto-send the invitation email, alert Ian.
+//   2. They want a callback -> alert Ian immediately with the details.
+// ─────────────────────────────────────────────
+
+// Grab the first plausible email address from the customer's own messages.
+function extractEmail(messages) {
+  const re = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
+  for (const m of messages) {
+    if (m.role !== "user" || !m.content) continue;
+    const hit = String(m.content).match(re);
+    if (hit) return hit[0].toLowerCase();
+  }
+  return null;
+}
+
+// Did they ask to be phoned rather than emailed?
+function wantsCallback(messages) {
+  const re = /\b(call me|ring me|give me a call|phone me|rather (talk|chat|speak)|speak to you|call back|callback)\b/i;
+  return messages.some(m => m.role === "user" && m.content && re.test(String(m.content)));
+}
+
+async function fireSalesHandoff(
+  db, db_helpers, sendSMS, twilioNumber, callerNumber, messages, plumber, email2
+) {
+  try {
+    const convo = await db.collection("conversations").findOne({ twilioNumber, callerNumber });
+    if (!convo) return;
+
+    const ownerPhone = plumber.ownerPhone;
+    const email      = extractEmail(messages);
+
+    // ── 1. Email captured -> send the invitation, once ──
+    if (email && !convo.salesEmailSent) {
+      try {
+        await email2.sendInvitationEmail(email, null, null);
+        await db.collection("conversations").updateOne(
+          { _id: convo._id },
+          { $set: { salesEmailSent: true, salesEmail: email, updatedAt: new Date() } }
+        );
+        console.log(`Sales: invitation email sent to ${email} (from ${callerNumber})`);
+
+        if (ownerPhone) {
+          await sendSMS(ownerPhone, twilioNumber,
+            `NEW PROSPECT - email captured\n${email}\nFrom: ${callerNumber}\nInvitation email sent automatically.`);
+        }
+      } catch (e) {
+        console.error("Sales: failed to send invitation email:", e.message);
+      }
+      return;
+    }
+
+    // ── 2. They want a callback -> alert immediately, once ──
+    if (wantsCallback(messages) && !convo.salesCallbackAlerted) {
+      await db.collection("conversations").updateOne(
+        { _id: convo._id },
+        { $set: { salesCallbackAlerted: true, updatedAt: new Date() } }
+      );
+      console.log(`Sales: callback requested by ${callerNumber}`);
+
+      if (ownerPhone) {
+        const preferred = extractTimePreference(
+          messages.filter(m => m.role === "user").map(m => m.content).join(" ")
+        );
+        await sendSMS(ownerPhone, twilioNumber,
+          `HOT PROSPECT - wants a call\nNumber: ${callerNumber}` +
+          (preferred ? `\nBest time: ${preferred}` : "") +
+          `\nRing them back.`);
+      }
+    }
+  } catch (err) {
+    console.error("Sales handoff error:", err.message);
+  }
+}
+
+module.exports = { fireLeadHandoff, analyseConversation, fireSalesHandoff };
 
 // ─────────────────────────────────────────────────────────────
 // INTEGRATION INSTRUCTIONS
