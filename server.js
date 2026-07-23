@@ -1,5 +1,5 @@
 require("dotenv").config();
-const APP_VERSION = "2.17.0";  // SINGLE SOURCE OF TRUTH - bump this each deploy
+const APP_VERSION = "2.18.0";  // SINGLE SOURCE OF TRUTH - bump this each deploy
 const express = require("express");
 const { registerSalesRoutes } = require("./sales");
 const twilio = require("twilio");
