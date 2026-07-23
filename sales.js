@@ -1630,6 +1630,97 @@ function registerSalesRoutes(app, db, db_helpers, emailService) {
       res.status(500).json({ error: err.message });
     }
   });
+  // ── EXPORT ALL LEADS AS CSV (take this BEFORE any cleanup) ──────────────
+  // GET /admin/sales/export?secret=YOUR_SECRET
+  app.get("/admin/sales/export", requireAdminAuth, async (req, res) => {
+    try {
+      const leads = await db.collection("leads").find({}).toArray();
+
+      const cols = ["businessName","phone","ownerName","email","website","city","state",
+                    "stage","doNotCall","callbackAt","dials","lastDialedAt","notes","createdAt"];
+
+      function cell(v) {
+        if (v === null || v === undefined) return "";
+        if (v instanceof Date) return v.toISOString();
+        const s = String(v).replace(/"/g, '""');
+        return /[",\n]/.test(s) ? '"' + s + '"' : s;
+      }
+
+      let csv = cols.join(",") + "\n";
+      for (const l of leads) {
+        csv += cols.map(c => cell(l[c])).join(",") + "\n";
+      }
+
+      const stamp = new Date().toISOString().slice(0, 10);
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition",
+        'attachment; filename="zeromisscall-leads-' + stamp + '.csv"');
+      res.send(csv);
+      console.log("Leads exported: " + leads.length + " rows");
+    } catch (err) {
+      console.error("Lead export error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── CLEANUP: keep ONLY leads with a scheduled callback ──────────────────
+  // Two-step on purpose so nothing is wiped by accident:
+  //   1. POST /admin/sales/cleanup?secret=...            -> preview (counts only)
+  //   2. POST /admin/sales/cleanup?secret=...&confirm=yes -> actually deletes
+  app.post("/admin/sales/cleanup", requireAdminAuth, async (req, res) => {
+    try {
+      // "Keep" = a real callback date is set. Everything else goes.
+      const keepFilter   = { callbackAt: { $ne: null, $exists: true } };
+      const deleteFilter = { $or: [ { callbackAt: null }, { callbackAt: { $exists: false } } ] };
+
+      const keepCount   = await db.collection("leads").countDocuments(keepFilter);
+      const deleteCount = await db.collection("leads").countDocuments(deleteFilter);
+
+      const confirmed = req.query.confirm === "yes" || req.body.confirm === "yes";
+
+      if (!confirmed) {
+        // PREVIEW ONLY - nothing is touched.
+        const sample = await db.collection("leads")
+          .find(keepFilter)
+          .project({ businessName: 1, phone: 1, callbackAt: 1, stage: 1 })
+          .limit(25)
+          .toArray();
+
+        return res.json({
+          preview: true,
+          willKeep: keepCount,
+          willDelete: deleteCount,
+          keepSample: sample,
+          message: "PREVIEW ONLY - nothing deleted. " + keepCount + " leads with a callback " +
+                   "would be KEPT, " + deleteCount + " would be PERMANENTLY DELETED. " +
+                   "Export a backup first (/admin/sales/export), then re-run with &confirm=yes to proceed.",
+        });
+      }
+
+      if (keepCount === 0) {
+        return res.status(400).json({
+          error: "Refusing to run",
+          message: "No leads have a callback set - this would delete your entire list. " +
+                   "Set callbacks on the leads you want to keep first.",
+        });
+      }
+
+      const result = await db.collection("leads").deleteMany(deleteFilter);
+      console.log("Sales cleanup: deleted " + (result.deletedCount || 0) +
+                  " leads, kept " + keepCount + " with callbacks");
+
+      res.json({
+        success: true,
+        deleted: result.deletedCount || 0,
+        kept: keepCount,
+        message: "Deleted " + (result.deletedCount || 0) + " leads. Kept " + keepCount +
+                 " with a scheduled callback.",
+      });
+    } catch (err) {
+      console.error("Sales cleanup error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
 }
 
 module.exports = { registerSalesRoutes };
