@@ -902,6 +902,23 @@ function buildSalesDashboardHtml(leads, imports) {
     "if(r.ok){alert(d.message);location.reload();}else{alert((d&&(d.message||d.error))||'Rescore failed');}" +
     "}catch(e){alert('Network error: '+e.message);}" +
     "}" +
+    "function exportLeads(){" +
+    "window.location='/admin/sales/export?secret='+encodeURIComponent(getSecret());" +
+    "}" +
+    "async function cleanupLeads(){" +
+    "try{" +
+    "var p=await fetch('/admin/sales/cleanup?secret='+encodeURIComponent(getSecret()),{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});" +
+    "var pd=await p.json();" +
+    "if(!p.ok){alert((pd&&(pd.message||pd.error))||'Preview failed');return;}" +
+    "var nl=String.fromCharCode(10);" +
+    "var msg='CLEAN UP LIST'+nl+nl+'KEEP: '+pd.willKeep+' leads with a scheduled callback'+nl+'DELETE: '+pd.willDelete+' leads (permanent)'+nl+nl+'Exported a CSV backup first?'+nl+nl+'OK = permanently delete '+pd.willDelete+' leads.';" +
+    "if(!confirm(msg))return;" +
+    "if(!confirm('Last check - permanently delete '+pd.willDelete+' leads?'))return;" +
+    "var r=await fetch('/admin/sales/cleanup?secret='+encodeURIComponent(getSecret())+'&confirm=yes',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});" +
+    "var d=await r.json();" +
+    "if(r.ok){alert(d.message);location.reload();}else{alert((d&&(d.message||d.error))||'Cleanup failed');}" +
+    "}catch(e){alert('Network error: '+e.message);}" +
+    "}" +
     "<\/script>";
 
   var dateStr = now.toLocaleDateString("en-US", { weekday:"long", month:"long", day:"numeric", year:"numeric" });
@@ -935,6 +952,8 @@ function buildSalesDashboardHtml(leads, imports) {
     (cntUnscored > 0
       ? "<button onclick='rescoreAll()' style='background:#E8791A;color:#fff;border:none;border-radius:8px;padding:10px 18px;font-family:Nunito,sans-serif;font-size:13px;font-weight:800;cursor:pointer;white-space:nowrap;'>Score " + cntUnscored + " unscored leads</button>"
       : "<button onclick='rescoreAll()' style='background:rgba(255,255,255,0.06);color:#96aec6;border:1px solid rgba(255,255,255,0.18);border-radius:8px;padding:10px 14px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;'>Re-score all</button>") +
+    "<button onclick='exportLeads()' style='background:rgba(255,255,255,0.06);color:#96aec6;border:1px solid rgba(255,255,255,0.18);border-radius:8px;padding:10px 14px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;'>&#11015; Export CSV</button>" +
+    "<button onclick='cleanupLeads()' style='background:rgba(240,82,82,0.12);color:#f05252;border:1px solid rgba(240,82,82,0.3);border-radius:8px;padding:10px 14px;font-size:12px;font-weight:800;cursor:pointer;white-space:nowrap;'>&#129529; Clean Up List</button>" +
     "</div>" +
     // score buttons + toggles row
     "<div style='display:flex;gap:8px;flex-wrap:wrap;align-items:center;'>" +
