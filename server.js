@@ -273,52 +273,71 @@ function humanSpeech(text) {
 
 app.post("/voice", validateTwilio, async (req, res) => {
   const twilioNumber = req.body.To;
-  const plumber = await db_helpers.getPlumberByTwilioNumber(db, twilioNumber);
-  const businessName = plumber ? plumber.businessName : "us";
-  const ownerName    = plumber ? String(plumber.ownerName || "the team").trim().split(" ")[0] : "the team";
-
   const VoiceResponse = twilio.twiml.VoiceResponse;
-  const twiml = new VoiceResponse();
 
-  // IVR consent: caller must press 1 to opt in to text messages.
-  // This is an affirmative, logged opt-in - the strongest consent basis.
-  const gather = twiml.gather({
-    input: "dtmf",
-    numDigits: 1,
-    action: (process.env.PUBLIC_BASE_URL || "https://missed-call-bot-production.up.railway.app") + "/voice-consent",
-    method: "POST",
-    timeout: 10,
-    actionOnEmptyResult: true,
-  });
+  let plumber = null;
+  try {
+    plumber = await db_helpers.getPlumberByTwilioNumber(db, twilioNumber);
+  } catch (err) {
+    // A DB hiccup must NOT give the caller "application error". Fall through
+    // with plumber=null and still play a generic greeting + consent prompt.
+    console.error("/voice: plumber lookup failed:", err.message);
+  }
 
-  // Accounts can override the intro line (the ZeroMissCall sales line greets
-  // callers as Ian, not as a plumber out on a job). The consent instruction
-  // and required disclosures are always appended, so press-1 consent and the
-  // A2P wording can never be lost by a custom greeting.
-  const introLine = (plumber && plumber.customGreeting && String(plumber.customGreeting).trim())
-    ? String(plumber.customGreeting).trim()
-    : `Hey! Thanks for calling ${businessName}. ${ownerName}'s probably out on a job right now, but I can help.`;
+  try {
+    const businessName = plumber ? plumber.businessName : "us";
+    const ownerName    = plumber ? String(plumber.ownerName || "the team").trim().split(" ")[0] : "the team";
 
-  gather.say(
-    { voice: CALL_VOICE },
-    humanSpeech(
-      introLine + ` ` +
-      `To get help by text, just press one, and I'll text you right back. ` +
-      `Message frequency varies, and message and data rates may apply. You can reply STOP any time to opt out. ` +
-      `Or to skip the text, press two, or just hang up.`
-    )
-  );
+    const twiml = new VoiceResponse();
 
-  // If they press nothing (timeout), Twilio falls through to here:
-  // no consent captured, so no text is sent. Say goodbye and hang up.
-  twiml.say(
-    { voice: CALL_VOICE },
-    humanSpeech(`No problem at all. <break time="200ms"/> ${ownerName} will see your missed call and get right back to you. <break time="200ms"/> Take care!`)
-  );
-  twiml.hangup();
+    // IVR consent: caller must press 1 to opt in to text messages.
+    // This is an affirmative, logged opt-in - the strongest consent basis.
+    const gather = twiml.gather({
+      input: "dtmf",
+      numDigits: 1,
+      action: (process.env.PUBLIC_BASE_URL || "https://missed-call-bot-production.up.railway.app") + "/voice-consent",
+      method: "POST",
+      timeout: 10,
+      actionOnEmptyResult: true,
+    });
 
-  res.type("text/xml");
-  res.send(twiml.toString());
+    // Accounts can override the intro line (the ZeroMissCall sales line greets
+    // callers as Ian, not as a plumber out on a job). The consent instruction
+    // and required disclosures are always appended, so press-1 consent and the
+    // A2P wording can never be lost by a custom greeting.
+    const introLine = (plumber && plumber.customGreeting && String(plumber.customGreeting).trim())
+      ? String(plumber.customGreeting).trim()
+      : `Hey! Thanks for calling ${businessName}. ${ownerName}'s probably out on a job right now, but I can help.`;
+
+    gather.say(
+      { voice: CALL_VOICE },
+      humanSpeech(
+        introLine + ` ` +
+        `To get help by text, just press one, and I'll text you right back. ` +
+        `Message frequency varies, and message and data rates may apply. You can reply STOP any time to opt out. ` +
+        `Or to skip the text, press two, or just hang up.`
+      )
+    );
+
+    // If they press nothing (timeout), Twilio falls through to here:
+    // no consent captured, so no text is sent. Say goodbye and hang up.
+    twiml.say(
+      { voice: CALL_VOICE },
+      humanSpeech(`No problem at all. <break time="200ms"/> ${ownerName} will see your missed call and get right back to you. <break time="200ms"/> Take care!`)
+    );
+    twiml.hangup();
+
+    res.type("text/xml");
+    res.send(twiml.toString());
+  } catch (err) {
+    // Last-resort fallback: play a minimal valid TwiML rather than erroring.
+    console.error("/voice: handler error:", err.message);
+    const fallback = new VoiceResponse();
+    fallback.say("Sorry, we can't take your call right now. Please try again shortly.");
+    fallback.hangup();
+    res.type("text/xml");
+    res.send(fallback.toString());
+  }
 });
 
 // ─────────────────────────────────────────────
