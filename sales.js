@@ -1346,10 +1346,11 @@ function registerSalesRoutes(app, db, db_helpers, emailService) {
       if (outcome === "interested") {
         const inviteEmail = setOps.email || lead.email;
         const inviteName  = setOps.ownerName || lead.ownerName || "";
+        const inviteBusiness = setOps.businessName || lead.businessName || "";
 
         if (inviteEmail) {
           try {
-            await email2.sendInvitationEmail(inviteEmail, inviteName);
+            await email2.sendInvitationEmail(inviteEmail, inviteName, inviteBusiness);
             inviteSent = true;
             setOps.stage = "invited";
             inviteMessage = "Invitation sent to " + inviteEmail;
